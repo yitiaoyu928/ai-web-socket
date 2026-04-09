@@ -1,18 +1,14 @@
 let state = {
   currentTab: null,
   linkStatus: "unlink",
-  ws: null,
   model: "-----",
 };
 let messages = [];
 let messageRef = null;
-let timer = null;
 let p = new Proxy(state, {
   get: (target, key) => target[key],
   set: (target, key, value) => {
     target[key] = value;
-    // if (key === "linkStatus" || key === "wsUrl") {
-    // }
     updateStatus();
     return true;
   },
@@ -21,75 +17,70 @@ let pMessage = new Proxy(messages, {
   get: (target, key) => target[key],
   set: (target, key, value) => {
     target[key] = value;
-    // if (key === "messages") {
-    //   chrome.storage.local.set({ messages: p.messages });
-    // }
     updateMessage();
     return true;
   },
 });
-function linkWs() {
-  const wsUrl = document.querySelector("#ws-url");
-  p.ws = new WebSocket(wsUrl.value);
-  p.ws.onopen = () => {
-    addMessage("WebSocket 连接成功");
-    p.linkStatus = "link";
-    chrome.tabs.sendMessage(p.currentTab.id, { action: "connected" });
-  };
-  p.ws.onclose = () => {
-    addMessage("WebSocket 连接关闭");
-    p.linkStatus = "unlink";
-  };
-  p.ws.onmessage = (event) => {
-    console.log(event);
-  };
-}
 function updateStatus() {
-  let status = document.getElementById("status");
-  let btn = document.getElementById("connect-btn");
-  btn.textContent = p.linkStatus === "link" ? "断开连接" : "连接 WebSocket";
-  status.textContent = p.linkStatus === "link" ? "已连接" : "未连接";
-  status.className =
-    p.linkStatus === "link" ? "status connected" : "status disconnected";
+  const status = document.getElementById("status");
+  const btn = document.getElementById("connect-btn");
+  const statusDot = document.getElementById("status-dot");
+  
+  if (p.linkStatus === "link") {
+    btn.textContent = "断开连接";
+    btn.className = "i-btn btn-disconnect";
+    status.textContent = "已连接";
+    status.className = "status connected";
+    statusDot.className = "status-dot dot-connected";
+  } else {
+    btn.textContent = "连接 WebSocket";
+    btn.className = "i-btn btn-connect";
+    status.textContent = "未连接";
+    status.className = "status disconnected";
+    statusDot.className = "status-dot dot-disconnected";
+  }
 }
 function updateMessage() {
   if (!messageRef) {
     messageRef = document.getElementById("message-log");
   }
-  // 清空现有内容
   messageRef.innerHTML = "";
 
-  let fragment = document.createDocumentFragment();
+  const fragment = document.createDocumentFragment();
   pMessage.forEach((item) => {
-    let messageElement = document.createElement("div");
+    const messageElement = document.createElement("div");
+    messageElement.className = "message-item";
     messageElement.textContent = `[${item.time}] ${item.content}`;
     fragment.appendChild(messageElement);
   });
   messageRef.appendChild(fragment);
-
-  // 自动滚动到底部
   messageRef.scrollTop = messageRef.scrollHeight;
-}
-function heartbeat() {
-  timer = setInterval(() => {
-    if (p.linkStatus === "link") {
-      p.ws.send(
-        JSON.stringify({
-          type: 10001,
-          data: "heartbeat",
-        }),
-      );
-    } else {
-      clearInterval(timer);
-      timer = null;
-    }
-  }, 5000);
 }
 function addMessage(message) {
   pMessage.push({
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
     content: message,
   });
+}
+
+function connectWs() {
+  const wsUrl = document.querySelector("#ws-url").value;
+  chrome.runtime.sendMessage({ 
+    action: "connect", 
+    url: wsUrl 
+  }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error("连接失败:", chrome.runtime.lastError.message);
+      addMessage("连接失败: " + chrome.runtime.lastError.message);
+      return;
+    }
+    addMessage("正在连接 WebSocket...");
+  });
+}
+
+function disconnectWs() {
+  chrome.runtime.sendMessage({ action: "disconnect" });
+  addMessage("正在断开 WebSocket...");
 }
 // 页面加载时检查状态
 document.addEventListener("DOMContentLoaded", async () => {
@@ -99,45 +90,91 @@ document.addEventListener("DOMContentLoaded", async () => {
     return;
   }
   p.currentTab = tab;
-  addMessage("初始化完毕！");
 
-  // 从存储中恢复状态
-  //  p.linkStatus
+  // 从 Background 获取当前状态
+  chrome.runtime.sendMessage({ action: "getStatus" }, (response) => {
+    if (response) {
+      p.linkStatus = response.linkStatus;
+      if (response.messageHistory && response.messageHistory.length > 0) {
+        messages = response.messageHistory;
+        updateMessage();
+      }
+      updateStatus();
+    }
+  });
 
-  updateMessage();
-  document.querySelector(".title").innerHTML = "当前AI:" + p.model;
-  // 先注入 content script
+  // 恢复存储的配置
+  const stored = await chrome.storage.local.get(["wsUrl", "model"]);
+  if (stored.wsUrl) {
+    document.querySelector("#ws-url").value = stored.wsUrl;
+  }
+  if (stored.model) {
+    p.model = stored.model;
+  }
+  document.querySelector(".title").textContent = "当前AI: " + p.model;
+
+  addMessage("Popup 初始化完毕！");
+  updateStatus();
+
+  // 注入 content script
   await chrome.scripting.executeScript({
     target: { tabId: p.currentTab.id },
     files: ["content.js"],
   });
 
-  // 确认就绪后再发送业务消息
+  // 发送 loaded 消息
   chrome.tabs.sendMessage(p.currentTab.id, { action: "loaded" }, (response) => {
     if (chrome.runtime.lastError) {
       console.error("发送 loaded 消息失败:", chrome.runtime.lastError.message);
-      return;
     }
-    const connectBtn = document.getElementById("connect-btn");
-    connectBtn.addEventListener("click", () => {
-      if (p.linkStatus === "unlink") {
-        linkWs();
-        heartbeat();
-      } else {
-        clearInterval(timer);
-        timer = null;
-        p.ws.close(1000, "正常关闭");
-      }
-    });
   });
+
+  // 连接/断开按钮
+  const connectBtn = document.getElementById("connect-btn");
+  connectBtn.addEventListener("click", () => {
+    if (p.linkStatus === "unlink") {
+      connectWs();
+    } else {
+      disconnectWs();
+    }
+  });
+
+  // 监听来自 Background 和 Content Script 的消息
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    switch (request.action) {
-      case "detect":
-        document.querySelector(".title").innerHTML =
-          "当前AI:" + request.data.model;
-        p.model = request.data.model;
-        addMessage(`${request.data.message} ${request.data.model}`);
-        break;
+    // 处理 Background 广播的消息
+    if (request.type) {
+      switch (request.type) {
+        case "connected":
+          p.linkStatus = "link";
+          addMessage(request.message);
+          break;
+        case "disconnected":
+          p.linkStatus = "unlink";
+          addMessage(request.message);
+          break;
+        case "message":
+          addMessage("收到: " + request.data);
+          break;
+        case "error":
+          p.linkStatus = "unlink";
+          addMessage(request.message);
+          break;
+        case "pageRefreshed":
+          addMessage("检测到页面刷新");
+          break;
+      }
+    }
+
+    // 处理 Content Script 的消息
+    if (request.action) {
+      switch (request.action) {
+        case "detect":
+          document.querySelector(".title").textContent =
+            "当前AI: " + request.data.model;
+          p.model = request.data.model;
+          addMessage(request.data.message + " " + request.data.model);
+          break;
+      }
     }
   });
 });

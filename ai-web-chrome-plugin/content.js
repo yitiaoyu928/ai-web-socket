@@ -63,6 +63,15 @@ if (!window.__AI_WEB_INJECTED) {
       }
     }
   }
+
+  // 页面加载时通知 popup 重置状态
+  function notifyPageRefresh() {
+    chrome.runtime.sendMessage({
+      action: "pageRefreshed",
+      data: { url: window.location.href, timestamp: Date.now() }
+    });
+  }
+
   // 监听来自 popup 的消息
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log("Content script 收到消息:", request);
@@ -100,4 +109,11 @@ if (!window.__AI_WEB_INJECTED) {
 
     return true; // 保持消息通道开放以支持异步响应
   });
+
+  // 页面加载完成后通知刷新
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', notifyPageRefresh);
+  } else {
+    notifyPageRefresh();
+  }
 }
