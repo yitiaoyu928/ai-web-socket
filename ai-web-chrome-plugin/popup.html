@@ -1,112 +1,97 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AI Web Assistant</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Web Assistant</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-    body {
-      width: 300px;
-      padding: 20px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-    }
+      body {
+        width: 300px;
+        padding: 20px;
+      }
+      .i-btn {
+        flex-shrink: 0;
+        flex-grow: 0;
 
-    .header {
-      text-align: center;
-      margin-bottom: 20px;
-    }
+        margin: 0 auto;
+        padding: 4px 16px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .title {
+        margin-bottom: 20px;
+      }
 
-    .header h1 {
-      font-size: 20px;
-      margin-bottom: 5px;
-    }
+      .wrapper {
+        text-align: center;
+      }
+      .input-wrapper {
+        box-sizing: border-box;
+      }
+      .input-wrapper input {
+        padding: 4px 16px;
+        border: none;
+        outline:none;
+        border: 1px solid #c1d1c1;
+        margin-bottom: 8px;
+        border-radius: 8px;
+        width: 100%;
+      }
+      .input-wrapper input:focus {
+        border-color: #4CAF50;
+      }
+      .status {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #666;
+      }
+      .status.connected {
+        color: #4CAF50;
+      }
+      .status.disconnected {
+        color: #f44336;
+      }
+      .message-log {
+        margin-top: 12px;
+        max-height: 150px;
+        overflow-y: auto;
+        background: #f5f5f5;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 11px;
+        text-align: left;
+      }
+      .message-log div {
+        margin-bottom: 4px;
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrapper">
+      <div class="title">当前页面AI: qwen</div>
+      <div class="input-wrapper">
+        <input id="ws-url" placeholder="socket地址" value="ws://localhost:8899/ws" />
+        <button class="i-btn" id="connect-btn">链接Socket</button>
+      </div>
+      <div class="status disconnected" id="status">未连接</div>
+      <div class="message-log" id="message-log"></div>
+    </div>
 
-    .header p {
-      font-size: 12px;
-      opacity: 0.9;
-    }
-
-    .button-group {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .btn {
-      padding: 12px 20px;
-      border: none;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-    }
-
-    .btn-primary {
-      background: white;
-      color: #667eea;
-    }
-
-    .btn-primary:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    }
-
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.2);
-      color: white;
-      border: 2px solid rgba(255, 255, 255, 0.3);
-    }
-
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 0.3);
-      transform: translateY(-2px);
-    }
-
-    .status {
-      margin-top: 15px;
-      padding: 10px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 6px;
-      font-size: 12px;
-      text-align: center;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>🤖 AI 助手</h1>
-    <p>智能页面元素检测和自动化</p>
-  </div>
-
-  <div class="button-group">
-    <button class="btn btn-primary" id="togglePanel">
-      <span>📱</span>
-      <span>打开悬浮面板</span>
-    </button>
-    
-    <button class="btn btn-secondary" id="scanPage">
-      <span>🔍</span>
-      <span>快速扫描页面</span>
-    </button>
-  </div>
-
-  <div class="status" id="status">
-    点击按钮开始使用
-  </div>
-
-  <script src="popup.js"></script>
-</body>
+    <script src="popup.js"></script>
+  </body>
 </html>
