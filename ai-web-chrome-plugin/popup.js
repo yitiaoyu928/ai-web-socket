@@ -113,7 +113,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   document.querySelector(".title").textContent = "当前AI: " + p.model;
 
-  addMessage("Popup 初始化完毕！");
+  addMessage("初始化完毕！");
   updateStatus();
 
   // 注入 content script
