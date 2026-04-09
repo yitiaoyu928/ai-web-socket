@@ -38,16 +38,17 @@ if (!window.__AI_WEB_INJECTED) {
     console.log("Content script 收到消息:", request);
 
     switch (request.action) {
-      case "ping":
-        // 心跳检测，用于确认 content script 就绪
-        sendResponse({ success: true, message: "pong" });
-        break;
       case "loaded":
-        sendResponse({ success: true, message: "初始化成功" });
+        sendResponse({
+          success: true,
+          data: {
+            message: "初始化成功",
+            type: "loaded",
+          },
+        });
         break;
       case "connected":
         // WebSocket 连接成功通知
-        console.log("WebSocket 已连接");
         autoQuerySelectorElement(sendResponse);
         sendResponse({ success: true, message: "收到连接通知" });
         break;

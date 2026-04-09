@@ -1,90 +1,101 @@
-let currentTab;
-let linkStatus = "unlink";
-let ws = null;
-
+let state = { currentTab: null, linkStatus: "unlink", ws: null };
+let messages = [];
+let messageRef = null;
+let p = new Proxy(state, {
+  get: (target, key) => target[key],
+  set: (target, key, value) => {
+    target[key] = value;
+    updateStatus();
+    return true;
+  },
+});
+let pMessage = new Proxy(messages, {
+  get: (target, key) => target[key],
+  set: (target, key, value) => {
+    target[key] = value;
+    updateMessage();
+    return true;
+  },
+});
 function linkWs() {
   const wsUrl = document.querySelector("#ws-url");
-  ws = new WebSocket(wsUrl.value);
-  ws.onopen = () => {
+  p.ws = new WebSocket(wsUrl.value);
+  console.log(p.ws)
+  p.ws.onopen = () => {
     console.log("WebSocket 连接成功");
-    linkStatus = "link";
+    addMessage("WebSocket 连接成功");
+    p.linkStatus = "link";
   };
-  ws.onclose = () => {
+  p.ws.onclose = () => {
     console.log("WebSocket 连接关闭");
-    linkStatus = "unlink";
+    addMessage("WebSocket 连接关闭");
+    p.linkStatus = "unlink";
   };
-  ws.onmessage = (event) => {
-    console.log("WebSocket 接收到消息:", event.data);
+  p.ws.onmessage = (event) => {
+    console.log(event);
   };
 }
+function updateStatus() {
+  let status = document.getElementById("status");
+  let btn = document.getElementById("connect-btn");
+  btn.textContent = p.linkStatus === "link" ? "断开连接" : "连接 WebSocket";
+  status.textContent = p.linkStatus === "link" ? "已连接" : "未连接";
+  status.className =
+    p.linkStatus === "link" ? "status connected" : "status disconnected";
+}
+function updateMessage() {
+  if (!messageRef) {
+    messageRef = document.getElementById("message-log");
+  }
+  // 清空现有内容
+  messageRef.innerHTML = "";
 
-// 等待 content script 就绪（ping-pong 检测）
-function waitForContentReady(tabId, maxRetries = 10, interval = 200) {
-  return new Promise((resolve, reject) => {
-    let retries = 0;
-    const tryPing = () => {
-      chrome.tabs.sendMessage(tabId, { action: "ping" }, (response) => {
-        if (chrome.runtime.lastError) {
-          retries++;
-          if (retries >= maxRetries) {
-            reject(new Error("Content script 未就绪: " + chrome.runtime.lastError.message));
-            return;
-          }
-          setTimeout(tryPing, interval);
-          return;
-        }
-        if (response && response.success) {
-          resolve(response);
-        } else {
-          retries++;
-          if (retries >= maxRetries) {
-            reject(new Error("Content script 响应异常"));
-            return;
-          }
-          setTimeout(tryPing, interval);
-        }
-      });
-    };
-    tryPing();
+  let fragment = document.createDocumentFragment();
+  pMessage.forEach((item) => {
+    let messageElement = document.createElement("div");
+    messageElement.textContent = `[${item.time}] ${item.content}`;
+    fragment.appendChild(messageElement);
+  });
+  messageRef.appendChild(fragment);
+
+  // 自动滚动到底部
+  messageRef.scrollTop = messageRef.scrollHeight;
+}
+function addMessage(message) {
+  pMessage.push({
+    time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+    content: message,
   });
 }
-
 // 页面加载时检查状态
 document.addEventListener("DOMContentLoaded", async () => {
-  console.log("Popup DOMContentLoaded 开始");
-
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.id) {
     console.error("无法获取当前标签页");
     return;
   }
-  currentTab = tab;
-
+  p.currentTab = tab;
+  addMessage("初始化完毕！");
   // 先注入 content script
   await chrome.scripting.executeScript({
-    target: { tabId: currentTab.id },
+    target: { tabId: p.currentTab.id },
     files: ["content.js"],
   });
 
-  // 用 ping-pong 机制等待 content script 就绪
-  try {
-    await waitForContentReady(currentTab.id);
-    console.log("Content script 已就绪");
-  } catch (err) {
-    console.error(err.message);
-    return;
-  }
-
   // 确认就绪后再发送业务消息
-  chrome.tabs.sendMessage(currentTab.id, { action: "loaded" }, (response) => {
+  chrome.tabs.sendMessage(p.currentTab.id, { action: "loaded" }, (response) => {
     if (chrome.runtime.lastError) {
       console.error("发送 loaded 消息失败:", chrome.runtime.lastError.message);
       return;
     }
-    console.log("loaded 响应:", response);
     const connectBtn = document.getElementById("connect-btn");
     connectBtn.addEventListener("click", () => {
-      console.log(123);
+      if (p.linkStatus === "unlink") {
+        linkWs();
+      } else {
+        console.log(p.ws)
+        p.ws.close(1000, "正常关闭");
+      }
     });
   });
 });

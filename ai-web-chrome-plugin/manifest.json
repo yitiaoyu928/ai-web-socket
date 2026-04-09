@@ -3,13 +3,8 @@
   "description": "智能页面元素检测和自动化工具",
   "version": "1.0",
   "manifest_version": 3,
-  "permissions": [
-    "activeTab",
-    "storage", "scripting"
-  ],
-  "host_permissions": [
-    "<all_urls>"
-  ],
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": "ai_search.png"
