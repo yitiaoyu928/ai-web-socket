@@ -5,7 +5,7 @@
   "manifest_version": 3,
   "permissions": [
     "activeTab",
-    "storage"
+    "storage", "scripting"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -13,12 +13,5 @@
   "action": {
     "default_popup": "popup.html",
     "default_icon": "ai_search.png"
-  },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }
