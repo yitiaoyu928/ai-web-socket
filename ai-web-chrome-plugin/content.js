@@ -9,12 +9,24 @@ if (!window.__AI_WEB_INJECTED) {
     button: ".send-button",
     isInput: true,
   });
+  aiUrlMap.set("Claude", {
+    input: "div[contenteditable='true']",
+    button: "button[aria-label='Send message']",
+    isInput: false,
+  });
   function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
       ai = "Qwen";
       chrome.runtime.sendMessage({
         action: "detect",
         data: { message: "AI检测成功", model: "通义千问" },
+      });
+      return;
+    } else if (window.location.href.includes("claude")) {
+      ai = "Claude";
+      chrome.runtime.sendMessage({
+        action: "detect",
+        data: { message: "AI检测成功", model: "Claude" },
       });
       return;
     }
@@ -42,6 +54,8 @@ if (!window.__AI_WEB_INJECTED) {
       if (inputElement && buttonElement) {
         if (elements.isInput) {
           insertText(inputElement, message);
+        } else {
+          inputElement.innerHTML = message;
         }
         setTimeout(() => {
           buttonElement.click();
@@ -67,7 +81,7 @@ if (!window.__AI_WEB_INJECTED) {
         // WebSocket 连接成功通知
         autoQuerySelectorElement(sendResponse);
         sendResponse({ success: true, message: "链接成功" });
-        // fillMessage("链接成功");
+        fillMessage("链接成功");
         break;
 
       case "executeScript":
