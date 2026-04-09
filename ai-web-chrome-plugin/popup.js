@@ -1,6 +1,7 @@
 let state = { currentTab: null, linkStatus: "unlink", ws: null };
 let messages = [];
 let messageRef = null;
+let timer = null;
 let p = new Proxy(state, {
   get: (target, key) => target[key],
   set: (target, key, value) => {
@@ -61,6 +62,19 @@ function updateMessage() {
   // 自动滚动到底部
   messageRef.scrollTop = messageRef.scrollHeight;
 }
+function heartbeat() {
+  timer = setInterval(() => {
+    if (p.linkStatus === "link") {
+      p.ws.send({
+        type: 10001,
+        data: "heartbeat",
+      });
+    } else {
+      clearInterval(timer);
+      timer = null;
+    }
+  }, 5000);
+}
 function addMessage(message) {
   pMessage.push({
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
@@ -92,8 +106,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     connectBtn.addEventListener("click", () => {
       if (p.linkStatus === "unlink") {
         linkWs();
+        heartbeat();
       } else {
-        console.log(p.ws);
+        clearInterval(timer);
+        timer = null;
         p.ws.close(1000, "正常关闭");
       }
     });

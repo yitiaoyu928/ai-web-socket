@@ -19,16 +19,33 @@ if (!window.__AI_WEB_INJECTED) {
       return;
     }
   }
+  // content.js
+  function insertText(element, text) {
+    element.focus();
+
+    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    ).set;
+
+    nativeInputValueSetter.call(element, element.value + text);
+
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }
   function fillMessage(message) {
     let elements = aiUrlMap.get(ai);
     if (elements) {
       let inputElement = document.querySelector(elements.input);
       let buttonElement = document.querySelector(elements.button);
+
       if (inputElement && buttonElement) {
         if (elements.isInput) {
-          inputElement.value = "test";
+          insertText(inputElement, message);
         }
-        buttonElement.click();
+        setTimeout(() => {
+          buttonElement.click();
+        }, 500);
       }
     }
   }
@@ -49,7 +66,8 @@ if (!window.__AI_WEB_INJECTED) {
       case "connected":
         // WebSocket 连接成功通知
         autoQuerySelectorElement(sendResponse);
-        sendResponse({ success: true, message: "收到连接通知" });
+        sendResponse({ success: true, message: "链接成功" });
+        // fillMessage("链接成功");
         break;
 
       case "executeScript":
