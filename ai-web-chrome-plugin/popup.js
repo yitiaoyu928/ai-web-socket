@@ -25,7 +25,7 @@ function updateStatus() {
   const status = document.getElementById("status");
   const btn = document.getElementById("connect-btn");
   const statusDot = document.getElementById("status-dot");
-  
+
   if (p.linkStatus === "link") {
     btn.textContent = "断开连接";
     btn.className = "i-btn btn-disconnect";
@@ -65,17 +65,20 @@ function addMessage(message) {
 
 function connectWs() {
   const wsUrl = document.querySelector("#ws-url").value;
-  chrome.runtime.sendMessage({ 
-    action: "connect", 
-    url: wsUrl 
-  }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("连接失败:", chrome.runtime.lastError.message);
-      addMessage("连接失败: " + chrome.runtime.lastError.message);
-      return;
-    }
-    addMessage("正在连接 WebSocket...");
-  });
+  chrome.runtime.sendMessage(
+    {
+      action: "connect",
+      url: wsUrl,
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        console.error("连接失败:", chrome.runtime.lastError.message);
+        addMessage("连接失败: " + chrome.runtime.lastError.message);
+        return;
+      }
+      addMessage("正在连接 WebSocket...");
+    },
+  );
 }
 
 function disconnectWs() {
@@ -154,6 +157,14 @@ document.addEventListener("DOMContentLoaded", async () => {
           break;
         case "message":
           addMessage("收到: " + request.data);
+          // 发送 loaded 消息
+          chrome.tabs.sendMessage(
+            p.currentTab.id,
+            { action: "message_receive", data: request.data },
+            (response) => {
+              console.log(response);
+            },
+          );
           break;
         case "error":
           p.linkStatus = "unlink";

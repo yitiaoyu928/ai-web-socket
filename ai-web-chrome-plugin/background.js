@@ -56,7 +56,6 @@ function connectWebSocket(url) {
     };
     messageHistory.push(message);
     if (messageHistory.length > 100) messageHistory.shift();
-
     broadcastToAll({ type: "message", data: event.data });
   };
 

@@ -16,7 +16,7 @@ if (!window.__AI_WEB_INJECTED) {
   });
   function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
-      console.log(123321)
+      console.log(123321);
       ai = "Qwen";
       chrome.runtime.sendMessage({
         action: "detect",
@@ -69,7 +69,7 @@ if (!window.__AI_WEB_INJECTED) {
   function notifyPageRefresh() {
     chrome.runtime.sendMessage({
       action: "pageRefreshed",
-      data: { url: window.location.href, timestamp: Date.now() }
+      data: { url: window.location.href, timestamp: Date.now() },
     });
   }
 
@@ -91,9 +91,14 @@ if (!window.__AI_WEB_INJECTED) {
         // WebSocket 连接成功通知
         autoQuerySelectorElement(sendResponse);
         sendResponse({ success: true, message: "链接成功" });
-        fillMessage("链接成功");
+        // fillMessage("链接成功");
         break;
-
+      case "message_receive":
+        let pMsg = JSON.parse(request.data);
+        if (pMsg.type === 1001) {
+          fillMessage(pMsg.message);
+        }
+        break;
       case "executeScript":
         // 执行自定义脚本
         try {
@@ -112,8 +117,8 @@ if (!window.__AI_WEB_INJECTED) {
   });
 
   // 页面加载完成后通知刷新
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', notifyPageRefresh);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", notifyPageRefresh);
   } else {
     notifyPageRefresh();
   }

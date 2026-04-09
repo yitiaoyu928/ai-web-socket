@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,6 +18,10 @@ type Hub struct {
 	mu        sync.RWMutex
 	clients   map[*websocket.Conn]bool
 	broadcast chan []byte
+}
+type UMessage struct {
+	Msg   string `json:"message"`
+	MType int32  `json:"type"`
 }
 
 func newHub() *Hub {
@@ -107,7 +112,15 @@ var serveCmd = &cobra.Command{
 			if text == "" {
 				continue
 			}
-			hub.broadcast <- []byte(text)
+			var uMsg UMessage
+			uMsg.Msg = text
+			uMsg.MType = 1001
+			jByte, err := json.Marshal(uMsg)
+			if err != nil {
+				log.Println("json marshal error:", err)
+				continue
+			}
+			hub.broadcast <- jByte
 			fmt.Printf("[已发送给 %d 个客户端] %s\n", len(hub.clients), text)
 		}
 	},
