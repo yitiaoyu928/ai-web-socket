@@ -9,13 +9,12 @@ if (!window.__AI_WEB_INJECTED) {
     button: ".send-button",
     isInput: true,
   });
-  function autoQuerySelectorElement(response) {
-    console.log(window.location.href);
+  function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
       ai = "Qwen";
       chrome.runtime.sendMessage({
         action: "detect",
-        data: { message: "AI检测成功" },
+        data: { message: "AI检测成功", model: "通义千问" },
       });
       return;
     }

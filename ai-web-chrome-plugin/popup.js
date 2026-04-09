@@ -20,11 +20,11 @@ let pMessage = new Proxy(messages, {
 function linkWs() {
   const wsUrl = document.querySelector("#ws-url");
   p.ws = new WebSocket(wsUrl.value);
-  console.log(p.ws)
   p.ws.onopen = () => {
     console.log("WebSocket 连接成功");
     addMessage("WebSocket 连接成功");
     p.linkStatus = "link";
+    chrome.tabs.sendMessage(p.currentTab.id, { action: "connected" });
   };
   p.ws.onclose = () => {
     console.log("WebSocket 连接关闭");
@@ -93,9 +93,18 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (p.linkStatus === "unlink") {
         linkWs();
       } else {
-        console.log(p.ws)
+        console.log(p.ws);
         p.ws.close(1000, "正常关闭");
       }
     });
+  });
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    switch (request.action) {
+      case "detect":
+        document.querySelector(".title").innerHTML =
+          "当前AI:" + request.data.model;
+        addMessage(`${request.data.message} ${request.data.model}`);
+        break;
+    }
   });
 });
