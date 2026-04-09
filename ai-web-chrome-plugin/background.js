@@ -43,7 +43,6 @@ function connectWebSocket(url) {
     // 过滤心跳包消息
     try {
       const data = JSON.parse(event.data);
-      console.log(data)
       if (data.type === 10001) {
         return;
       }
