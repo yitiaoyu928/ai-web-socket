@@ -35,8 +35,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("收到消息 from %s: %s\n", clientAddr, string(message))
 
 		// 回复客户端
-		response := fmt.Sprintf("服务器收到: %s", string(message))
-		if err := conn.WriteMessage(messageType, []byte(response)); err != nil {
+		if err := conn.WriteMessage(messageType, []byte(string(message))); err != nil {
 			fmt.Printf("发送消息失败: %v\n", err)
 			break
 		}

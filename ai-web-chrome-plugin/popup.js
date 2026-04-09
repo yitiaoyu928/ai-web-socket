@@ -146,7 +146,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       switch (request.type) {
         case "connected":
           p.linkStatus = "link";
-          addMessage(request.message);
+          // addMessage(request.message);
           break;
         case "disconnected":
           p.linkStatus = "unlink";
@@ -165,8 +165,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     }
 
-    // 处理 Content Script 的消息
-    if (request.action) {
+    // 处理 Content Script 的直接消息（不处理 Background 转发的）
+    if (request.action && sender.tab) {
+      // sender.tab 存在说明消息来自 Content Script
       switch (request.action) {
         case "detect":
           document.querySelector(".title").textContent =

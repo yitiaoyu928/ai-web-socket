@@ -16,6 +16,7 @@ if (!window.__AI_WEB_INJECTED) {
   });
   function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
+      console.log(123321)
       ai = "Qwen";
       chrome.runtime.sendMessage({
         action: "detect",

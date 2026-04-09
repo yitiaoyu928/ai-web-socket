@@ -15,7 +15,7 @@ function connectWebSocket(url) {
 
   wsUrl = url || wsUrl;
   chrome.storage.local.set({ wsUrl });
-  
+
   ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
@@ -24,7 +24,9 @@ function connectWebSocket(url) {
     broadcastToAll({ type: "connected", message: "WebSocket 连接成功" });
     startHeartbeat();
     if (currentTabId) {
-      chrome.tabs.sendMessage(currentTabId, { action: "connected" }).catch(() => {});
+      chrome.tabs
+        .sendMessage(currentTabId, { action: "connected" })
+        .catch(() => {});
     }
   };
 
@@ -37,13 +39,25 @@ function connectWebSocket(url) {
 
   ws.onmessage = (event) => {
     console.log("Background: 收到消息", event.data);
+
+    // 过滤心跳包消息
+    try {
+      const data = JSON.parse(event.data);
+      console.log(data)
+      if (data.type === 10001) {
+        return;
+      }
+    } catch (e) {
+      // 如果不是 JSON 格式，继续处理
+    }
+
     const message = {
       time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-      content: event.data,
+      content: event.data.data,
     };
     messageHistory.push(message);
     if (messageHistory.length > 100) messageHistory.shift();
-    
+
     broadcastToAll({ type: "message", data: event.data });
   };
 
@@ -100,10 +114,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break;
 
     case "getStatus":
-      sendResponse({ 
-        linkStatus, 
-        wsUrl, 
-        messageHistory 
+      sendResponse({
+        linkStatus,
+        wsUrl,
+        messageHistory,
       });
       break;
 
@@ -124,7 +138,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     case "detect":
       currentTabId = sender.tab?.id;
-      broadcastToAll(request);
+      // 只记录当前 Tab ID，不广播（Popup 会直接收到 Content Script 的消息）
+      console.log("Background: 收到 detect 消息，AI 模型:", request.data.model);
       sendResponse({ success: true });
       break;
 
