@@ -1,4 +1,9 @@
-let state = { currentTab: null, linkStatus: "unlink", ws: null };
+let state = {
+  currentTab: null,
+  linkStatus: "unlink",
+  ws: null,
+  model: "-----",
+};
 let messages = [];
 let messageRef = null;
 let timer = null;
@@ -6,6 +11,8 @@ let p = new Proxy(state, {
   get: (target, key) => target[key],
   set: (target, key, value) => {
     target[key] = value;
+    // if (key === "linkStatus" || key === "wsUrl") {
+    // }
     updateStatus();
     return true;
   },
@@ -14,6 +21,9 @@ let pMessage = new Proxy(messages, {
   get: (target, key) => target[key],
   set: (target, key, value) => {
     target[key] = value;
+    // if (key === "messages") {
+    //   chrome.storage.local.set({ messages: p.messages });
+    // }
     updateMessage();
     return true;
   },
@@ -22,13 +32,11 @@ function linkWs() {
   const wsUrl = document.querySelector("#ws-url");
   p.ws = new WebSocket(wsUrl.value);
   p.ws.onopen = () => {
-    console.log("WebSocket 连接成功");
     addMessage("WebSocket 连接成功");
     p.linkStatus = "link";
     chrome.tabs.sendMessage(p.currentTab.id, { action: "connected" });
   };
   p.ws.onclose = () => {
-    console.log("WebSocket 连接关闭");
     addMessage("WebSocket 连接关闭");
     p.linkStatus = "unlink";
   };
@@ -65,10 +73,12 @@ function updateMessage() {
 function heartbeat() {
   timer = setInterval(() => {
     if (p.linkStatus === "link") {
-      p.ws.send({
-        type: 10001,
-        data: "heartbeat",
-      });
+      p.ws.send(
+        JSON.stringify({
+          type: 10001,
+          data: "heartbeat",
+        }),
+      );
     } else {
       clearInterval(timer);
       timer = null;
@@ -90,6 +100,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
   p.currentTab = tab;
   addMessage("初始化完毕！");
+
+  // 从存储中恢复状态
+  //  p.linkStatus
+
+  updateMessage();
+  document.querySelector(".title").innerHTML = "当前AI:" + p.model;
   // 先注入 content script
   await chrome.scripting.executeScript({
     target: { tabId: p.currentTab.id },
@@ -119,6 +135,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       case "detect":
         document.querySelector(".title").innerHTML =
           "当前AI:" + request.data.model;
+        p.model = request.data.model;
         addMessage(`${request.data.message} ${request.data.model}`);
         break;
     }
