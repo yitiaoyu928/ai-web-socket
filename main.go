@@ -42,16 +42,6 @@ type PromptSession struct {
 	Current   int
 }
 
-type SelectionStep struct {
-	Question string `json:"question"`
-	Answer   string `json:"answer"`
-}
-
-type SelectionPlan struct {
-	QAText string          `json:"qaText"`
-	Steps  []SelectionStep `json:"steps"`
-}
-
 type FilePayload struct {
 	Path     string `json:"path"`
 	FileText string `json:"file_text"`
@@ -218,22 +208,7 @@ var serveCmd = &cobra.Command{
 					continue
 				}
 				formatted := formatQuestionAnswers(activePrompt)
-				plan := buildSelectionPlan(activePrompt, formatted)
-				planBytes, err := json.Marshal(plan)
-				if err != nil {
-					log.Println("json marshal error:", err)
-				} else {
-					var actionMsg UMessage
-					actionMsg.Msg = string(planBytes)
-					actionMsg.MType = 2002
-					jAnswer, err := json.Marshal(actionMsg)
-					if err == nil {
-						hub.broadcast <- jAnswer
-						fmt.Printf("[已发送问答操作给 %d 个客户端]\n%s\n", len(hub.clients), formatted)
-					} else {
-						log.Println("json marshal error:", err)
-					}
-				}
+				fmt.Printf("[问答已完成]\n%s\n", formatted)
 				promptMu.Lock()
 				promptSession = nil
 				promptMu.Unlock()
@@ -283,22 +258,6 @@ func formatQuestionAnswers(session *PromptSession) string {
 		}
 	}
 	return b.String()
-}
-
-func buildSelectionPlan(session *PromptSession, qaText string) SelectionPlan {
-	steps := make([]SelectionStep, 0, len(session.Questions))
-	for i, q := range session.Questions {
-		if i < len(session.Answers) {
-			steps = append(steps, SelectionStep{
-				Question: q.Question,
-				Answer:   session.Answers[i],
-			})
-		}
-	}
-	return SelectionPlan{
-		QAText: qaText,
-		Steps:  steps,
-	}
 }
 
 func saveFilePayload(payload FilePayload) (string, error) {

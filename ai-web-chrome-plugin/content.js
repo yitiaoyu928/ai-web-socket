@@ -1,4 +1,4 @@
-const AI_WEB_CONTENT_VERSION = "2026-04-10.2";
+const AI_WEB_CONTENT_VERSION = "2026-04-10.3";
 if (window.__AI_WEB_CONTENT_VERSION !== AI_WEB_CONTENT_VERSION) {
   if (window.__AI_WEB_RELAY_HANDLER) {
     window.removeEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
@@ -123,76 +123,6 @@ if (!window.__AI_WEB_INJECTED) {
     }
   }
 
-  function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function normalizeText(value) {
-    return String(value || "").replace(/\s+/g, " ").trim();
-  }
-
-  function isVisible(el) {
-    if (!el) {
-      return false;
-    }
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-
-  function findClickableByText(text) {
-    const wanted = normalizeText(text);
-    if (!wanted) {
-      return null;
-    }
-    const selectors = [
-      "button",
-      "[role='button']",
-      "label",
-      "li",
-      ".option",
-      ".choice",
-      ".select-option",
-    ];
-    const all = document.querySelectorAll(selectors.join(","));
-    let exactMatch = null;
-    let fuzzyMatch = null;
-    for (const el of all) {
-      if (!isVisible(el)) {
-        continue;
-      }
-      const textContent = normalizeText(el.innerText || el.textContent);
-      if (!textContent) {
-        continue;
-      }
-      if (textContent === wanted) {
-        exactMatch = el;
-        break;
-      }
-      if (!fuzzyMatch && (textContent.includes(wanted) || wanted.includes(textContent))) {
-        fuzzyMatch = el;
-      }
-    }
-    return exactMatch || fuzzyMatch;
-  }
-
-  async function runSelectionPlan(plan) {
-    const steps = Array.isArray(plan?.steps) ? plan.steps : [];
-    for (const step of steps) {
-      const optionText = step?.answer || step?.selectedOption || "";
-      if (!optionText) {
-        continue;
-      }
-      const target = findClickableByText(optionText);
-      if (target) {
-        target.click();
-      }
-      await delay(2000);
-    }
-    if (typeof plan?.qaText === "string" && plan.qaText.trim()) {
-      fillMessage(plan.qaText.trim());
-    }
-  }
-
   // 页面加载时通知 popup 重置状态
   function notifyPageRefresh() {
     safeSendRuntimeMessage({
@@ -234,11 +164,6 @@ if (!window.__AI_WEB_INJECTED) {
         }
         if (pMsg?.type === 1001 && typeof pMsg.message === "string") {
           fillMessage(pMsg.message);
-        } else if (pMsg?.type === 2002 && typeof pMsg.message === "string") {
-          try {
-            const plan = JSON.parse(pMsg.message);
-            runSelectionPlan(plan);
-          } catch (error) {}
         }
         sendResponse({ success: true });
         break;
