@@ -4,12 +4,26 @@
   "version": "1.0",
   "manifest_version": 3,
   "permissions": ["activeTab", "storage", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": ["https://chat.qwen.ai/*","https://claude.ai/*"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": "ai_search.png"
   },
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*"]
+    }
+  ]
 }

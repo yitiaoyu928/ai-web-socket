@@ -7,6 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -22,6 +25,36 @@ type Hub struct {
 type UMessage struct {
 	Msg   string `json:"message"`
 	MType int32  `json:"type"`
+}
+
+type QuestionItem struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+}
+
+type QuestionPacket struct {
+	Questions []QuestionItem `json:"questions"`
+}
+
+type PromptSession struct {
+	Questions []QuestionItem
+	Answers   []string
+	Current   int
+}
+
+type SelectionStep struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+}
+
+type SelectionPlan struct {
+	QAText string          `json:"qaText"`
+	Steps  []SelectionStep `json:"steps"`
+}
+
+type FilePayload struct {
+	Path     string `json:"path"`
+	FileText string `json:"file_text"`
 }
 
 func newHub() *Hub {
@@ -72,6 +105,9 @@ var serveCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		port, _ := cmd.Flags().GetString("port")
 		hub := newHub()
+		var inputMu sync.Mutex
+		var promptMu sync.Mutex
+		var promptSession *PromptSession
 
 		// 启动广播协程
 		go hub.run()
@@ -89,11 +125,60 @@ var serveCmd = &cobra.Command{
 			go func() {
 				defer hub.unregister(conn)
 				for {
-					_, _, err := conn.ReadMessage()
+					_, msg, err := conn.ReadMessage()
 					if err != nil {
 						break
 					}
-					// fmt.Printf("[客户端 %s]: %s\n", conn.RemoteAddr(), msg)
+
+					if msg != nil {
+						// 解析 JSON
+						var uMsg UMessage
+						err := json.Unmarshal(msg, &uMsg)
+						if err != nil {
+							log.Println("json unmarshal error:", err)
+							continue
+						}
+						if uMsg.MType == 10001 {
+							continue
+						}
+						if uMsg.MType == 2001 {
+							var packet QuestionPacket
+							if err := json.Unmarshal([]byte(uMsg.Msg), &packet); err != nil {
+								log.Println("question packet unmarshal error:", err)
+								continue
+							}
+							if len(packet.Questions) == 0 {
+								continue
+							}
+							promptMu.Lock()
+							promptSession = &PromptSession{
+								Questions: packet.Questions,
+								Answers:   make([]string, 0, len(packet.Questions)),
+								Current:   0,
+							}
+							showPromptQuestion(promptSession)
+							promptMu.Unlock()
+							continue
+						}
+						if uMsg.MType == 3002 {
+							var payload FilePayload
+							if err := json.Unmarshal([]byte(uMsg.Msg), &payload); err != nil {
+								log.Println("file payload unmarshal error:", err)
+								continue
+							}
+							savedPath, err := saveFilePayload(payload)
+							if err != nil {
+								log.Println("save file error:", err)
+								continue
+							}
+							fmt.Printf("\n[文件已保存] %s\n", savedPath)
+							continue
+						}
+						fmt.Print(string(uMsg.Msg))
+						// 广播消息给所有客户端
+						// hub.broadcast <- msg
+						// fmt.Printf("[客户端 %s]: %s\n", conn.RemoteAddr(), msg)
+					}
 				}
 			}()
 		})
@@ -108,8 +193,51 @@ var serveCmd = &cobra.Command{
 		// stdin → 广播
 		scanner := bufio.NewScanner(os.Stdin)
 		for scanner.Scan() {
-			text := scanner.Text()
+			text := strings.TrimSpace(scanner.Text())
 			if text == "" {
+				continue
+			}
+			promptMu.Lock()
+			activePrompt := promptSession
+			promptMu.Unlock()
+			if activePrompt != nil {
+				inputMu.Lock()
+				index, err := strconv.Atoi(text)
+				if err != nil || index < 1 || index > len(activePrompt.Questions[activePrompt.Current].Options) {
+					fmt.Println("输入无效，请输入选项编号")
+					showPromptQuestion(activePrompt)
+					inputMu.Unlock()
+					continue
+				}
+				selected := activePrompt.Questions[activePrompt.Current].Options[index-1]
+				activePrompt.Answers = append(activePrompt.Answers, selected)
+				activePrompt.Current++
+				if activePrompt.Current < len(activePrompt.Questions) {
+					showPromptQuestion(activePrompt)
+					inputMu.Unlock()
+					continue
+				}
+				formatted := formatQuestionAnswers(activePrompt)
+				plan := buildSelectionPlan(activePrompt, formatted)
+				planBytes, err := json.Marshal(plan)
+				if err != nil {
+					log.Println("json marshal error:", err)
+				} else {
+					var actionMsg UMessage
+					actionMsg.Msg = string(planBytes)
+					actionMsg.MType = 2002
+					jAnswer, err := json.Marshal(actionMsg)
+					if err == nil {
+						hub.broadcast <- jAnswer
+						fmt.Printf("[已发送问答操作给 %d 个客户端]\n%s\n", len(hub.clients), formatted)
+					} else {
+						log.Println("json marshal error:", err)
+					}
+				}
+				promptMu.Lock()
+				promptSession = nil
+				promptMu.Unlock()
+				inputMu.Unlock()
 				continue
 			}
 			var uMsg UMessage
@@ -124,6 +252,73 @@ var serveCmd = &cobra.Command{
 			fmt.Printf("[已发送给 %d 个客户端] %s\n", len(hub.clients), text)
 		}
 	},
+}
+
+func showPromptQuestion(session *PromptSession) {
+	if session == nil || session.Current >= len(session.Questions) {
+		return
+	}
+	current := session.Questions[session.Current]
+	fmt.Printf("\n[%d/%d] %s\n", session.Current+1, len(session.Questions), current.Question)
+	for i, option := range current.Options {
+		fmt.Printf("%d) %s\n", i+1, option)
+	}
+	fmt.Print("请输入选项编号: ")
+}
+
+func formatQuestionAnswers(session *PromptSession) string {
+	if session == nil {
+		return ""
+	}
+	var b strings.Builder
+	for i, q := range session.Questions {
+		if i < len(session.Answers) {
+			b.WriteString("Q: ")
+			b.WriteString(q.Question)
+			b.WriteString("\nA: ")
+			b.WriteString(session.Answers[i])
+			if i != len(session.Questions)-1 {
+				b.WriteString("\n\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+func buildSelectionPlan(session *PromptSession, qaText string) SelectionPlan {
+	steps := make([]SelectionStep, 0, len(session.Questions))
+	for i, q := range session.Questions {
+		if i < len(session.Answers) {
+			steps = append(steps, SelectionStep{
+				Question: q.Question,
+				Answer:   session.Answers[i],
+			})
+		}
+	}
+	return SelectionPlan{
+		QAText: qaText,
+		Steps:  steps,
+	}
+}
+
+func saveFilePayload(payload FilePayload) (string, error) {
+	name := filepath.Base(strings.TrimSpace(payload.Path))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "partial_output.txt"
+	}
+	targetDir := filepath.Join(".", "received_files")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return "", err
+	}
+	targetPath := filepath.Join(targetDir, name)
+	if err := os.WriteFile(targetPath, []byte(payload.FileText), 0644); err != nil {
+		return "", err
+	}
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return targetPath, nil
+	}
+	return absPath, nil
 }
 
 func init() {

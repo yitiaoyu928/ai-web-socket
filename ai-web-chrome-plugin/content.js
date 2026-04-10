@@ -1,8 +1,62 @@
+const AI_WEB_CONTENT_VERSION = "2026-04-10.2";
+if (window.__AI_WEB_CONTENT_VERSION !== AI_WEB_CONTENT_VERSION) {
+  if (window.__AI_WEB_RELAY_HANDLER) {
+    window.removeEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
+  }
+  window.__AI_WEB_INJECTED = false;
+}
+window.__AI_WEB_CONTENT_VERSION = AI_WEB_CONTENT_VERSION;
+
 if (!window.__AI_WEB_INJECTED) {
   window.__AI_WEB_INJECTED = true;
+  window.__AI_WEB_RUNTIME_DEAD = false;
+  window.__AI_WEB_RELAY_COUNT = 0;
 
   let aiUrlMap = new Map();
   let ai = "";
+
+  function safeSendRuntimeMessage(message, callback) {
+    try {
+      if (
+        window.__AI_WEB_RUNTIME_DEAD ||
+        typeof chrome === "undefined" ||
+        !chrome.runtime ||
+        !chrome.runtime.id ||
+        !chrome.runtime.sendMessage
+      ) {
+        return false;
+      }
+      if (typeof callback === "function") {
+        chrome.runtime.sendMessage(message, (response) => {
+          try {
+            const lastError = chrome.runtime && chrome.runtime.lastError;
+            if (lastError) {
+              if (String(lastError.message || "").includes("Extension context invalidated")) {
+                window.__AI_WEB_RUNTIME_DEAD = true;
+              }
+              return;
+            }
+            callback(response);
+          } catch (error) {}
+        });
+      } else {
+        const result = chrome.runtime.sendMessage(message);
+        if (result && typeof result.catch === "function") {
+          result.catch((error) => {
+            if (String(error?.message || "").includes("Extension context invalidated")) {
+              window.__AI_WEB_RUNTIME_DEAD = true;
+            }
+          });
+        }
+      }
+      return true;
+    } catch (error) {
+      if (String(error?.message || "").includes("Extension context invalidated")) {
+        window.__AI_WEB_RUNTIME_DEAD = true;
+      }
+      return false;
+    }
+  }
 
   aiUrlMap.set("Qwen", {
     input: ".message-input-textarea",
@@ -16,16 +70,15 @@ if (!window.__AI_WEB_INJECTED) {
   });
   function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
-      console.log(123321);
       ai = "Qwen";
-      chrome.runtime.sendMessage({
+      safeSendRuntimeMessage({
         action: "detect",
         data: { message: "AI检测成功", model: "通义千问" },
       });
       return;
     } else if (window.location.href.includes("claude")) {
       ai = "Claude";
-      chrome.runtime.sendMessage({
+      safeSendRuntimeMessage({
         action: "detect",
         data: { message: "AI检测成功", model: "Claude" },
       });
@@ -50,24 +103,99 @@ if (!window.__AI_WEB_INJECTED) {
     let elements = aiUrlMap.get(ai);
     if (elements) {
       let inputElement = document.querySelector(elements.input);
-      let buttonElement = document.querySelector(elements.button);
 
-      if (inputElement && buttonElement) {
+      if (inputElement) {
         if (elements.isInput) {
           insertText(inputElement, message);
         } else {
-          inputElement.innerHTML = message;
+          inputElement.focus();
+          inputElement.textContent = message;
+          inputElement.dispatchEvent(new Event("input", { bubbles: true }));
+          inputElement.dispatchEvent(new Event("change", { bubbles: true }));
         }
         setTimeout(() => {
-          buttonElement.click();
+          let buttonElement = document.querySelector(elements.button);
+          if (buttonElement) {
+            buttonElement.click();
+          }
         }, 500);
       }
     }
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function normalizeText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function isVisible(el) {
+    if (!el) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+
+  function findClickableByText(text) {
+    const wanted = normalizeText(text);
+    if (!wanted) {
+      return null;
+    }
+    const selectors = [
+      "button",
+      "[role='button']",
+      "label",
+      "li",
+      ".option",
+      ".choice",
+      ".select-option",
+    ];
+    const all = document.querySelectorAll(selectors.join(","));
+    let exactMatch = null;
+    let fuzzyMatch = null;
+    for (const el of all) {
+      if (!isVisible(el)) {
+        continue;
+      }
+      const textContent = normalizeText(el.innerText || el.textContent);
+      if (!textContent) {
+        continue;
+      }
+      if (textContent === wanted) {
+        exactMatch = el;
+        break;
+      }
+      if (!fuzzyMatch && (textContent.includes(wanted) || wanted.includes(textContent))) {
+        fuzzyMatch = el;
+      }
+    }
+    return exactMatch || fuzzyMatch;
+  }
+
+  async function runSelectionPlan(plan) {
+    const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+    for (const step of steps) {
+      const optionText = step?.answer || step?.selectedOption || "";
+      if (!optionText) {
+        continue;
+      }
+      const target = findClickableByText(optionText);
+      if (target) {
+        target.click();
+      }
+      await delay(2000);
+    }
+    if (typeof plan?.qaText === "string" && plan.qaText.trim()) {
+      fillMessage(plan.qaText.trim());
+    }
+  }
+
   // 页面加载时通知 popup 重置状态
   function notifyPageRefresh() {
-    chrome.runtime.sendMessage({
+    safeSendRuntimeMessage({
       action: "pageRefreshed",
       data: { url: window.location.href, timestamp: Date.now() },
     });
@@ -94,19 +222,25 @@ if (!window.__AI_WEB_INJECTED) {
         // fillMessage("链接成功");
         break;
       case "message_receive":
-        let pMsg = JSON.parse(request.data);
-        if (pMsg.type === 1001) {
-          fillMessage(pMsg.message);
-        }
-        break;
-      case "executeScript":
-        // 执行自定义脚本
+        let pMsg = null;
         try {
-          const evalResult = eval(request.code);
-          sendResponse({ success: true, result: evalResult });
+          pMsg =
+            typeof request.data === "string"
+              ? JSON.parse(request.data)
+              : request.data;
         } catch (error) {
-          sendResponse({ success: false, error: error.message });
+          sendResponse({ success: false, message: "消息解析失败" });
+          break;
         }
+        if (pMsg?.type === 1001 && typeof pMsg.message === "string") {
+          fillMessage(pMsg.message);
+        } else if (pMsg?.type === 2002 && typeof pMsg.message === "string") {
+          try {
+            const plan = JSON.parse(pMsg.message);
+            runSelectionPlan(plan);
+          } catch (error) {}
+        }
+        sendResponse({ success: true });
         break;
 
       default:
@@ -122,4 +256,37 @@ if (!window.__AI_WEB_INJECTED) {
   } else {
     notifyPageRefresh();
   }
+
+  if (!window.__AI_WEB_HOOK_SCRIPT_INJECTED) {
+    window.__AI_WEB_HOOK_SCRIPT_INJECTED = true;
+    safeSendRuntimeMessage({ action: "injectHookMainWorld" });
+  }
+
+  if (!window.__AI_WEB_RELAY_BOUND) {
+    window.__AI_WEB_RELAY_BOUND = true;
+    window.__AI_WEB_RELAY_HANDLER = (e) => {
+      window.__AI_WEB_RELAY_COUNT += 1;
+      if (window.__AI_WEB_RELAY_COUNT <= 5 || window.__AI_WEB_RELAY_COUNT % 20 === 0) {
+        console.log("[Content Relay] forwarding", {
+          count: window.__AI_WEB_RELAY_COUNT,
+          type: e.detail?.type,
+          url: e.detail?.url,
+        });
+      }
+      const ok = safeSendRuntimeMessage({
+        source: "ext_hook",
+        payload: e.detail,
+      });
+      if (!ok || window.__AI_WEB_RUNTIME_DEAD) {
+        window.removeEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
+        window.__AI_WEB_RELAY_BOUND = false;
+      }
+    };
+    window.addEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
+  }
+  console.log("[Content] initialized", {
+    version: window.__AI_WEB_CONTENT_VERSION,
+    runtimeDead: window.__AI_WEB_RUNTIME_DEAD,
+    href: window.location.href,
+  });
 }

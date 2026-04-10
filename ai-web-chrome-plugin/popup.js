@@ -85,6 +85,26 @@ function disconnectWs() {
   chrome.runtime.sendMessage({ action: "disconnect" });
   addMessage("正在断开 WebSocket...");
 }
+
+async function ensureContentScriptReady(tabId) {
+  const loaded = await new Promise((resolve) => {
+    chrome.tabs.sendMessage(tabId, { action: "loaded" }, (response) => {
+      if (chrome.runtime.lastError || !response?.success) {
+        resolve(false);
+        return;
+      }
+      resolve(true);
+    });
+  });
+  if (loaded) {
+    return;
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["content.js"],
+  });
+  chrome.tabs.sendMessage(tabId, { action: "loaded" }, () => {});
+}
 // 页面加载时检查状态
 document.addEventListener("DOMContentLoaded", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -99,7 +119,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (response) {
       p.linkStatus = response.linkStatus;
       if (response.messageHistory && response.messageHistory.length > 0) {
-        messages = response.messageHistory;
+        messages.splice(0, messages.length, ...response.messageHistory);
         updateMessage();
       }
       updateStatus();
@@ -119,18 +139,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   addMessage("初始化完毕！");
   updateStatus();
 
-  // 注入 content script
-  await chrome.scripting.executeScript({
-    target: { tabId: p.currentTab.id },
-    files: ["content.js"],
-  });
-
-  // 发送 loaded 消息
-  chrome.tabs.sendMessage(p.currentTab.id, { action: "loaded" }, (response) => {
-    if (chrome.runtime.lastError) {
-      console.error("发送 loaded 消息失败:", chrome.runtime.lastError.message);
-    }
-  });
+  await ensureContentScriptReady(p.currentTab.id);
 
   // 连接/断开按钮
   const connectBtn = document.getElementById("connect-btn");
@@ -149,7 +158,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       switch (request.type) {
         case "connected":
           p.linkStatus = "link";
-          // addMessage(request.message);
+          addMessage(request.message);
           break;
         case "disconnected":
           p.linkStatus = "unlink";
@@ -157,14 +166,6 @@ document.addEventListener("DOMContentLoaded", async () => {
           break;
         case "message":
           addMessage("收到: " + request.data);
-          // 发送 loaded 消息
-          chrome.tabs.sendMessage(
-            p.currentTab.id,
-            { action: "message_receive", data: request.data },
-            (response) => {
-              console.log(response);
-            },
-          );
           break;
         case "error":
           p.linkStatus = "unlink";
@@ -172,6 +173,13 @@ document.addEventListener("DOMContentLoaded", async () => {
           break;
         case "pageRefreshed":
           addMessage("检测到页面刷新");
+          break;
+        case "detect":
+          if (request.data?.model) {
+            p.model = request.data.model;
+            document.querySelector(".title").textContent = "当前AI: " + p.model;
+            addMessage(request.data.message + " " + request.data.model);
+          }
           break;
       }
     }
