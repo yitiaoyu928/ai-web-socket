@@ -86,6 +86,20 @@ if (!window.__AI_WEB_INJECTED) {
     ],
     isInput: false,
   });
+  aiUrlMap.set("GPT", {
+    inputs: [
+      "div[contenteditable='true']",
+      "div[contenteditable='plaintext-only']",
+      "textarea",
+    ],
+    buttons: [
+      "button[aria-label='Send message']",
+      "button[aria-label='Send Message']",
+      "button[data-testid='send-button']",
+      "button[type='submit']",
+    ],
+    isInput: false,
+  });
 
   function findFirstElement(selectors) {
     if (!Array.isArray(selectors)) {

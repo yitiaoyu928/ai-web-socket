@@ -8,7 +8,8 @@
     "/completions",
     "/api/organizations/",
     "/api/chat_conversations",
-    "/api/retry_message"
+    "/api/retry_message",
+    "/f/conversation"
   ];
   function shouldHookUrl(url) {
     if (!url || typeof url !== "string") {

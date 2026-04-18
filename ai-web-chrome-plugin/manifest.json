@@ -4,7 +4,7 @@
   "version": "1.0",
   "manifest_version": 3,
   "permissions": ["activeTab", "storage", "scripting"],
-  "host_permissions": ["https://chat.qwen.ai/*","https://claude.ai/*"],
+  "host_permissions": ["https://chat.qwen.ai/*","https://claude.ai/*","https://chatgpt.com/*"],
   "action": {
     "default_popup": "popup.html",
     "default_icon": "ai_search.png"
@@ -14,7 +14,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*"],
+      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*","https://chatgpt.com/*"],
       "js": ["content.js"],
       "all_frames": true,
       "run_at": "document_idle"
@@ -23,7 +23,7 @@
   "web_accessible_resources": [
     {
       "resources": ["injected.js"],
-      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*"]
+      "matches": ["https://chat.qwen.ai/*","https://claude.ai/*","https://chatgpt.com/*"]
     }
   ]
 }
