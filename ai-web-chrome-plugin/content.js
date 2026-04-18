@@ -38,7 +38,7 @@ if (!window.__AI_WEB_INJECTED) {
               return;
             }
             callback(response);
-          } catch (error) {}
+          } catch (error) { }
         });
       } else {
         const result = chrome.runtime.sendMessage(message);
@@ -111,7 +111,7 @@ if (!window.__AI_WEB_INJECTED) {
         if (element) {
           return element;
         }
-      } catch (error) {}
+      } catch (error) { }
     }
     return null;
   }
@@ -129,6 +129,13 @@ if (!window.__AI_WEB_INJECTED) {
       safeSendRuntimeMessage({
         action: "detect",
         data: { message: "AI检测成功", model: "Claude" },
+      });
+      return;
+    } else if (window.location.href.includes("chatgpt")) {
+      ai = "GPT";
+      safeSendRuntimeMessage({
+        action: "detect",
+        data: { message: "AI检测成功", model: "ChatGPT" },
       });
       return;
     }
