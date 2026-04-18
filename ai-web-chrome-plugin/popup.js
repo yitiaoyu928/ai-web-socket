@@ -103,6 +103,7 @@ function renderConnection() {
 function renderAgentStatus() {
   const data = state.agentState || createEmptyAgentState();
   const mode = document.getElementById("agent-mode");
+  const stateText = document.getElementById("agent-state-text");
   const action = document.getElementById("agent-action");
   const root = document.getElementById("workspace-root");
   const files = document.getElementById("stat-files");
@@ -116,21 +117,24 @@ function renderAgentStatus() {
   const workspaceDetails = document.getElementById("workspace-details");
 
   if (!data.workspace_configured) {
-    mode.textContent = "Idle";
+    mode.textContent = "未初始化";
     mode.className = "mode-pill idle";
-    action.textContent = "等待设置工作目录";
+    stateText.textContent = "等待设置工作目录";
+    action.textContent = data.last_action || "尚未建立本地项目上下文";
     root.textContent = "未设置";
     hint.textContent = "在本地服务启动后，第一条输入应为工作目录路径。";
   } else if (data.awaiting_confirm) {
-    mode.textContent = "Pending Save";
+    mode.textContent = "待保存";
     mode.className = "mode-pill pending";
+    stateText.textContent = "等待确认保存";
     action.textContent = data.last_action || "存在待确认保存的编辑";
     root.textContent = data.workspace_root;
-    hint.textContent = "当前有暂存编辑，需在本地服务里执行 save 或 discard。";
+    hint.textContent = "当前有暂存编辑，需要在本地服务里执行 save 或 discard。";
   } else {
-    mode.textContent = "Ready";
+    mode.textContent = "已就绪";
     mode.className = "mode-pill";
-    action.textContent = data.last_action || "工作区已就绪";
+    stateText.textContent = "工作区已就绪";
+    action.textContent = data.last_action || "可继续向网页 AI 发送任务";
     root.textContent = data.workspace_root;
     hint.textContent = "工作区已同步到插件，可继续向网页 AI 发送任务。";
   }
