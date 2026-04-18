@@ -456,7 +456,6 @@ function handleComplete(data, sender) {
     size: data.body?.length ?? 0,
     body: data.body?.slice(0, 200), // 只打印前 200 字符，自行调整
   });
-  console.log(1111111, data.body);
   // 通过 WebSocket 发送到 WS 服务
   sendToWebSocket({
     type: 1001,
