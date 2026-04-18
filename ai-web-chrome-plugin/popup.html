@@ -3,188 +3,393 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Web Assistant</title>
+    <title>AI Web Agent</title>
     <style>
+      :root {
+        --bg: #eef3ef;
+        --card: rgba(255, 255, 255, 0.88);
+        --card-strong: rgba(255, 255, 255, 0.96);
+        --line: rgba(21, 65, 55, 0.12);
+        --text: #19312c;
+        --muted: #5a6f68;
+        --accent: #0f766e;
+        --accent-soft: rgba(15, 118, 110, 0.1);
+        --warn: #c77d19;
+        --warn-soft: rgba(199, 125, 25, 0.12);
+        --danger: #b14d40;
+        --shadow: 0 12px 30px rgba(25, 49, 44, 0.12);
+      }
+
       * {
-        margin: 0;
-        padding: 0;
         box-sizing: border-box;
       }
 
       body {
-        width: 320px;
-        padding: 16px;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        width: 368px;
+        margin: 0;
+        padding: 14px;
+        color: var(--text);
+        font: 13px/1.45 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 42%),
+          linear-gradient(180deg, #f7fbf8 0%, var(--bg) 100%);
       }
 
-      .wrapper {
-        text-align: center;
+      .app {
+        display: grid;
+        gap: 12px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--card);
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(8px);
+      }
+
+      .header {
+        padding: 14px 14px 12px;
+        background:
+          linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(199, 125, 25, 0.08)),
+          var(--card-strong);
+      }
+
+      .eyebrow {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .title-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 6px;
       }
 
       .title {
-        margin-bottom: 16px;
-        font-size: 16px;
-        font-weight: 600;
-        color: #333;
+        font-size: 18px;
+        font-weight: 700;
       }
 
-      .input-wrapper {
-        margin-bottom: 12px;
+      .model-pill,
+      .mode-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
       }
 
-      .input-wrapper input {
-        padding: 8px 12px;
-        border: 1px solid #d1d5db;
+      .model-pill {
+        background: rgba(25, 49, 44, 0.08);
+        color: var(--text);
+      }
+
+      .mode-pill {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .mode-pill.pending {
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+
+      .mode-pill.idle {
+        background: rgba(90, 111, 104, 0.12);
+        color: var(--muted);
+      }
+
+      .section {
+        padding: 14px;
+      }
+
+      .section-title {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      .input-label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+      }
+
+      .ws-row {
+        display: grid;
+        gap: 10px;
+      }
+
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid rgba(21, 65, 55, 0.16);
+        border-radius: 12px;
         outline: none;
-        border-radius: 6px;
-        width: 100%;
-        font-size: 13px;
-        transition: border-color 0.2s;
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.92);
       }
 
-      .input-wrapper input:focus {
-        border-color: #4CAF50;
-        box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.1);
+      input:focus {
+        border-color: rgba(15, 118, 110, 0.45);
+        box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.08);
       }
 
-      .i-btn {
-        margin-top: 8px;
-        padding: 8px 20px;
-        border: none;
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.2s;
-        width: 100%;
-      }
-
-      .btn-connect {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-      }
-
-      .btn-connect:hover {
-        background: linear-gradient(135deg, #5568d3 0%, #653a8b 100%);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
-      }
-
-      .btn-disconnect {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-      }
-
-      .btn-disconnect:hover {
-        background: linear-gradient(135deg, #e082ea 0%, #e44659 100%);
-        transform: translateY(-1px);
-        box-shadow: 0 4px 8px rgba(245, 87, 108, 0.3);
-      }
-
-      .status-wrapper {
+      .button-row {
         display: flex;
         align-items: center;
-        justify-content: center;
+        gap: 10px;
+      }
+
+      .btn {
+        flex: 1;
+        padding: 10px 14px;
+        border: none;
+        border-radius: 12px;
+        cursor: pointer;
+        color: #fff;
+        font-weight: 700;
+        background: linear-gradient(135deg, #0f766e, #115e59);
+      }
+
+      .btn.disconnect {
+        background: linear-gradient(135deg, #b14d40, #8f3d34);
+      }
+
+      .status-line {
+        display: flex;
+        align-items: center;
         gap: 8px;
-        margin-top: 12px;
-        padding: 8px;
-        background: #f9fafb;
-        border-radius: 6px;
+        color: var(--muted);
       }
 
-      .status-dot {
-        width: 8px;
-        height: 8px;
+      .dot {
+        width: 9px;
+        height: 9px;
         border-radius: 50%;
-        transition: all 0.3s;
+        background: #94a3b8;
       }
 
-      .dot-connected {
-        background: #4CAF50;
-        box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
-        animation: pulse 2s infinite;
+      .dot.connected {
+        background: #0f9d75;
+        box-shadow: 0 0 0 4px rgba(15, 157, 117, 0.12);
       }
 
-      .dot-disconnected {
-        background: #9ca3af;
+      .agent-grid {
+        display: grid;
+        gap: 12px;
       }
 
-      @keyframes pulse {
-        0%, 100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.5;
-        }
+      .meta {
+        display: grid;
+        gap: 6px;
       }
 
-      .status {
-        font-size: 13px;
-        font-weight: 500;
-      }
-
-      .status.connected {
-        color: #4CAF50;
-      }
-
-      .status.disconnected {
-        color: #6b7280;
-      }
-
-      .message-log {
-        margin-top: 12px;
-        max-height: 180px;
-        overflow-y: auto;
-        background: #f3f4f6;
-        padding: 10px;
-        border-radius: 6px;
+      .meta-label {
         font-size: 11px;
-        text-align: left;
-        border: 1px solid #e5e7eb;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
       }
 
-      .message-log::-webkit-scrollbar {
-        width: 6px;
-      }
-
-      .message-log::-webkit-scrollbar-track {
-        background: #f1f1f1;
-        border-radius: 3px;
-      }
-
-      .message-log::-webkit-scrollbar-thumb {
-        background: #888;
-        border-radius: 3px;
-      }
-
-      .message-log::-webkit-scrollbar-thumb:hover {
-        background: #555;
-      }
-
-      .message-item {
-        margin-bottom: 6px;
+      .path {
         word-break: break-all;
-        line-height: 1.4;
-        color: #374151;
-        padding: 4px 6px;
-        background: white;
-        border-radius: 4px;
-        border-left: 3px solid #667eea;
+        font-family: Consolas, "SFMono-Regular", monospace;
+        font-size: 12px;
+      }
+
+      .stat-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .stat-chip {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(25, 49, 44, 0.07);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .hint {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .list,
+      .log-list {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .list-item {
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+      }
+
+      .list-item strong {
+        display: block;
+        font-size: 12px;
+      }
+
+      .subtle {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.66);
+        overflow: hidden;
+      }
+
+      summary {
+        cursor: pointer;
+        padding: 10px 12px;
+        font-weight: 700;
+        list-style: none;
+      }
+
+      summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .details-body {
+        padding: 0 12px 12px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .tree {
+        max-height: 136px;
+        overflow: auto;
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        color: #173934;
+        background: rgba(15, 118, 110, 0.08);
+        font: 11px/1.45 Consolas, "SFMono-Regular", monospace;
+        white-space: pre-wrap;
+      }
+
+      .log {
+        max-height: 184px;
+        overflow: auto;
+      }
+
+      .log-item {
+        padding: 9px 10px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+      }
+
+      .log-time {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .empty {
+        color: var(--muted);
+        font-style: italic;
       }
     </style>
   </head>
   <body>
-    <div class="wrapper">
-      <div class="title">------</div>
-      <div class="input-wrapper">
-        <input id="ws-url" placeholder="WebSocket 地址" value="ws://localhost:8899/ws" />
-        <button class="i-btn btn-connect" id="connect-btn">连接 WebSocket</button>
-      </div>
-      <div class="status-wrapper">
-        <div class="status-dot dot-disconnected" id="status-dot"></div>
-        <div class="status disconnected" id="status">未连接</div>
-      </div>
-      <div class="message-log" id="message-log"></div>
+    <div class="app">
+      <section class="card header">
+        <div class="eyebrow">AI Web Socket</div>
+        <div class="title-row">
+          <div class="title">Local Agent Bridge</div>
+          <div class="model-pill" id="model-pill">AI: -----</div>
+        </div>
+      </section>
+
+      <section class="card section">
+        <h2 class="section-title">Connection</h2>
+        <div class="ws-row">
+          <div>
+            <label class="input-label" for="ws-url">WebSocket 地址</label>
+            <input id="ws-url" value="ws://localhost:8899/ws" />
+          </div>
+          <div class="button-row">
+            <button class="btn" id="connect-btn">连接 WebSocket</button>
+            <div class="status-line">
+              <span class="dot" id="status-dot"></span>
+              <span id="status-text">未连接</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card section">
+        <h2 class="section-title">Agent Status</h2>
+        <div class="agent-grid">
+          <div class="title-row">
+            <div>
+              <div class="meta-label">Current Mode</div>
+              <div id="agent-action">等待设置工作目录</div>
+            </div>
+            <div class="mode-pill idle" id="agent-mode">Idle</div>
+          </div>
+
+          <div class="meta">
+            <div class="meta-label">Workspace</div>
+            <div class="path" id="workspace-root">未设置</div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-chip" id="stat-files">文件 0</div>
+            <div class="stat-chip" id="stat-dirs">目录 0</div>
+            <div class="stat-chip" id="stat-pending">待保存 0</div>
+          </div>
+
+          <p class="hint" id="agent-hint">
+            在本地服务启动后，第一条输入应为工作目录路径。
+          </p>
+
+          <div>
+            <div class="meta-label">Pending Edits</div>
+            <ul class="list" id="pending-list"></ul>
+            <div class="empty" id="pending-empty">当前没有待确认保存的编辑。</div>
+          </div>
+
+          <details id="workspace-details">
+            <summary>Workspace Snapshot</summary>
+            <div class="details-body">
+              <ul class="list" id="summary-list"></ul>
+              <pre class="tree" id="tree-preview"></pre>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="card section">
+        <h2 class="section-title">Message Log</h2>
+        <div class="log" id="message-log"></div>
+      </section>
     </div>
 
     <script src="popup.js"></script>

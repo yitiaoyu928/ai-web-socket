@@ -1,79 +1,260 @@
-let state = {
+function createEmptyAgentState() {
+  return {
+    workspace_configured: false,
+    workspace_root: "",
+    file_count: 0,
+    dir_count: 0,
+    language_summary: [],
+    important_files: [],
+    notes: [],
+    tree_preview: [],
+    pending: [],
+    pending_count: 0,
+    awaiting_confirm: false,
+    last_action: "",
+    updated_at: "",
+  };
+}
+
+const state = {
   currentTab: null,
   linkStatus: "unlink",
   model: "-----",
+  agentState: createEmptyAgentState(),
 };
-let messages = [];
-let messageRef = null;
-let p = new Proxy(state, {
-  get: (target, key) => target[key],
-  set: (target, key, value) => {
-    target[key] = value;
-    updateStatus();
-    return true;
-  },
-});
-let pMessage = new Proxy(messages, {
-  get: (target, key) => target[key],
-  set: (target, key, value) => {
-    target[key] = value;
-    updateMessage();
-    return true;
-  },
-});
-function updateStatus() {
-  const status = document.getElementById("status");
-  const btn = document.getElementById("connect-btn");
-  const statusDot = document.getElementById("status-dot");
 
-  if (p.linkStatus === "link") {
-    btn.textContent = "断开连接";
-    btn.className = "i-btn btn-disconnect";
-    status.textContent = "已连接";
-    status.className = "status connected";
-    statusDot.className = "status-dot dot-connected";
-  } else {
-    btn.textContent = "连接 WebSocket";
-    btn.className = "i-btn btn-connect";
-    status.textContent = "未连接";
-    status.className = "status disconnected";
-    statusDot.className = "status-dot dot-disconnected";
+const messages = [];
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB"];
+  let size = bytes;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  const value = index === 0 ? Math.round(size) : size.toFixed(1);
+  return `${value} ${units[index]}`;
+}
+
+function formatTime(value) {
+  if (!value) {
+    return "--";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function normalizeAgentState(raw) {
+  const base = createEmptyAgentState();
+  if (!raw || typeof raw !== "object") {
+    return base;
+  }
+  return {
+    ...base,
+    ...raw,
+    language_summary: Array.isArray(raw.language_summary) ? raw.language_summary : [],
+    important_files: Array.isArray(raw.important_files) ? raw.important_files : [],
+    notes: Array.isArray(raw.notes) ? raw.notes : [],
+    tree_preview: Array.isArray(raw.tree_preview) ? raw.tree_preview : [],
+    pending: Array.isArray(raw.pending) ? raw.pending : [],
+  };
+}
+
+function parseWsEnvelope(raw) {
+  if (typeof raw !== "string") {
+    return raw;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
   }
 }
-function updateMessage() {
-  if (!messageRef) {
-    messageRef = document.getElementById("message-log");
+
+function renderHeader() {
+  document.getElementById("model-pill").textContent = `AI: ${state.model}`;
+}
+
+function renderConnection() {
+  const button = document.getElementById("connect-btn");
+  const dot = document.getElementById("status-dot");
+  const text = document.getElementById("status-text");
+
+  if (state.linkStatus === "link") {
+    button.textContent = "断开连接";
+    button.className = "btn disconnect";
+    dot.className = "dot connected";
+    text.textContent = "已连接";
+  } else {
+    button.textContent = "连接 WebSocket";
+    button.className = "btn";
+    dot.className = "dot";
+    text.textContent = "未连接";
   }
-  messageRef.innerHTML = "";
+}
+
+function renderAgentStatus() {
+  const data = state.agentState || createEmptyAgentState();
+  const mode = document.getElementById("agent-mode");
+  const action = document.getElementById("agent-action");
+  const root = document.getElementById("workspace-root");
+  const files = document.getElementById("stat-files");
+  const dirs = document.getElementById("stat-dirs");
+  const pending = document.getElementById("stat-pending");
+  const hint = document.getElementById("agent-hint");
+  const pendingList = document.getElementById("pending-list");
+  const pendingEmpty = document.getElementById("pending-empty");
+  const summaryList = document.getElementById("summary-list");
+  const treePreview = document.getElementById("tree-preview");
+  const workspaceDetails = document.getElementById("workspace-details");
+
+  if (!data.workspace_configured) {
+    mode.textContent = "Idle";
+    mode.className = "mode-pill idle";
+    action.textContent = "等待设置工作目录";
+    root.textContent = "未设置";
+    hint.textContent = "在本地服务启动后，第一条输入应为工作目录路径。";
+  } else if (data.awaiting_confirm) {
+    mode.textContent = "Pending Save";
+    mode.className = "mode-pill pending";
+    action.textContent = data.last_action || "存在待确认保存的编辑";
+    root.textContent = data.workspace_root;
+    hint.textContent = "当前有暂存编辑，需在本地服务里执行 save 或 discard。";
+  } else {
+    mode.textContent = "Ready";
+    mode.className = "mode-pill";
+    action.textContent = data.last_action || "工作区已就绪";
+    root.textContent = data.workspace_root;
+    hint.textContent = "工作区已同步到插件，可继续向网页 AI 发送任务。";
+  }
+
+  files.textContent = `文件 ${data.file_count || 0}`;
+  dirs.textContent = `目录 ${data.dir_count || 0}`;
+  pending.textContent = `待保存 ${data.pending_count || 0}`;
+
+  pendingList.innerHTML = "";
+  if (data.pending.length === 0) {
+    pendingEmpty.style.display = "block";
+  } else {
+    pendingEmpty.style.display = "none";
+    const fragment = document.createDocumentFragment();
+    data.pending.forEach((item) => {
+      const li = document.createElement("li");
+      li.className = "list-item";
+      const title = document.createElement("strong");
+      title.textContent = item.rel_path || "(unknown)";
+      const meta = document.createElement("div");
+      meta.className = "subtle";
+      meta.textContent = `${item.existed ? "更新" : "新建"} · staged ${formatBytes(item.bytes)} · original ${formatBytes(item.original_size)}`;
+      li.appendChild(title);
+      li.appendChild(meta);
+      fragment.appendChild(li);
+    });
+    pendingList.appendChild(fragment);
+  }
+
+  summaryList.innerHTML = "";
+  const summaryItems = [];
+  if (data.language_summary.length > 0) {
+    summaryItems.push(`语言分布: ${data.language_summary.join(", ")}`);
+  }
+  if (data.important_files.length > 0) {
+    summaryItems.push(`关键文件: ${data.important_files.slice(0, 5).join(", ")}`);
+  }
+  if (data.notes.length > 0) {
+    summaryItems.push(...data.notes.slice(0, 4));
+  }
+  if (data.updated_at) {
+    summaryItems.push(`最近更新: ${formatTime(data.updated_at)}`);
+  }
+
+  if (summaryItems.length === 0) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "工作区摘要尚未生成。";
+    summaryList.appendChild(li);
+  } else {
+    const fragment = document.createDocumentFragment();
+    summaryItems.forEach((text) => {
+      const li = document.createElement("li");
+      li.className = "list-item";
+      li.textContent = text;
+      fragment.appendChild(li);
+    });
+    summaryList.appendChild(fragment);
+  }
+
+  if (data.workspace_configured) {
+    workspaceDetails.style.display = "block";
+    treePreview.textContent =
+      data.tree_preview && data.tree_preview.length > 0
+        ? data.tree_preview.join("\n")
+        : "暂无目录树预览";
+  } else {
+    workspaceDetails.style.display = "none";
+    treePreview.textContent = "";
+  }
+}
+
+function renderMessages() {
+  const messageLog = document.getElementById("message-log");
+  messageLog.innerHTML = "";
+
+  if (messages.length === 0) {
+    messageLog.innerHTML = '<div class="empty">暂无消息。</div>';
+    return;
+  }
 
   const fragment = document.createDocumentFragment();
-  pMessage.forEach((item) => {
-    const messageElement = document.createElement("div");
-    messageElement.className = "message-item";
-    messageElement.textContent = `[${item.time}] ${item.content}`;
-    fragment.appendChild(messageElement);
+  messages.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "log-item";
+    const time = document.createElement("span");
+    time.className = "log-time";
+    time.textContent = item.time;
+    const content = document.createElement("div");
+    content.textContent = item.content;
+    row.appendChild(time);
+    row.appendChild(content);
+    fragment.appendChild(row);
   });
-  messageRef.appendChild(fragment);
-  messageRef.scrollTop = messageRef.scrollHeight;
+  messageLog.appendChild(fragment);
+  messageLog.scrollTop = messageLog.scrollHeight;
 }
+
 function addMessage(message) {
-  pMessage.push({
+  messages.push({
     time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
     content: message,
   });
+  if (messages.length > 100) {
+    messages.shift();
+  }
+  renderMessages();
+}
+
+function setAgentState(nextState) {
+  state.agentState = normalizeAgentState(nextState);
+  renderAgentStatus();
 }
 
 function connectWs() {
-  const wsUrl = document.querySelector("#ws-url").value;
+  const wsUrl = document.getElementById("ws-url").value.trim();
   chrome.runtime.sendMessage(
     {
       action: "connect",
       url: wsUrl,
     },
-    (response) => {
+    () => {
       if (chrome.runtime.lastError) {
-        console.error("连接失败:", chrome.runtime.lastError.message);
-        addMessage("连接失败: " + chrome.runtime.lastError.message);
+        addMessage(`连接失败: ${chrome.runtime.lastError.message}`);
         return;
       }
       addMessage("正在连接 WebSocket...");
@@ -86,6 +267,18 @@ function disconnectWs() {
   addMessage("正在断开 WebSocket...");
 }
 
+async function notifyCurrentTabConnected() {
+  if (!state.currentTab?.id) {
+    return;
+  }
+  await ensureContentScriptReady(state.currentTab.id);
+  try {
+    await chrome.tabs.sendMessage(state.currentTab.id, { action: "connected" });
+  } catch (error) {
+    addMessage("当前标签页无法接收连接通知");
+  }
+}
+
 async function ensureContentScriptReady(tabId) {
   const loaded = await new Promise((resolve) => {
     chrome.tabs.sendMessage(tabId, { action: "loaded" }, (response) => {
@@ -96,105 +289,137 @@ async function ensureContentScriptReady(tabId) {
       resolve(true);
     });
   });
+
   if (loaded) {
     return;
   }
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    files: ["content.js"],
-  });
-  chrome.tabs.sendMessage(tabId, { action: "loaded" }, () => {});
-}
-// 页面加载时检查状态
-document.addEventListener("DOMContentLoaded", async () => {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.id) {
-    console.error("无法获取当前标签页");
-    return;
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    chrome.tabs.sendMessage(tabId, { action: "loaded" }, () => {});
+  } catch (error) {
+    addMessage("当前标签页未注入内容脚本");
   }
-  p.currentTab = tab;
+}
 
-  // 从 Background 获取当前状态
-  chrome.runtime.sendMessage({ action: "getStatus" }, (response) => {
-    if (response) {
-      p.linkStatus = response.linkStatus;
-      if (response.messageHistory && response.messageHistory.length > 0) {
-        messages.splice(0, messages.length, ...response.messageHistory);
-        updateMessage();
+function handleBackgroundMessage(request, sender) {
+  if (request.type) {
+    switch (request.type) {
+      case "connected":
+        state.linkStatus = "link";
+        renderConnection();
+        addMessage(request.message);
+        notifyCurrentTabConnected();
+        return;
+      case "disconnected":
+        state.linkStatus = "unlink";
+        renderConnection();
+        addMessage(request.message);
+        return;
+      case "error":
+        state.linkStatus = "unlink";
+        renderConnection();
+        addMessage(request.message);
+        return;
+      case "pageRefreshed":
+        addMessage("检测到页面刷新");
+        return;
+      case "detect":
+        if (request.data?.model) {
+          state.model = request.data.model;
+          renderHeader();
+          addMessage(`${request.data.message} ${request.data.model}`);
+        }
+        return;
+      case "agentStatus":
+        setAgentState(request.data);
+        return;
+      case "message": {
+        const envelope = parseWsEnvelope(request.data);
+        if (envelope?.type === 1001 && typeof envelope.message === "string") {
+          addMessage(envelope.message);
+        } else if (typeof request.data === "string") {
+          addMessage(`收到: ${request.data}`);
+        }
+        return;
       }
-      updateStatus();
     }
+  }
+
+  if (request.action && sender.tab) {
+    switch (request.action) {
+      case "detect":
+        if (request.data?.model) {
+          state.model = request.data.model;
+          renderHeader();
+          addMessage(`${request.data.message} ${request.data.model}`);
+        }
+        break;
+    }
+  }
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+  renderHeader();
+  renderConnection();
+  renderAgentStatus();
+  renderMessages();
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id) {
+    state.currentTab = tab;
+  }
+
+  chrome.runtime.sendMessage({ action: "getStatus" }, (response) => {
+    if (!response) {
+      return;
+    }
+    state.linkStatus = response.linkStatus || "unlink";
+    if (Array.isArray(response.messageHistory) && response.messageHistory.length > 0) {
+      messages.splice(0, messages.length, ...response.messageHistory);
+    }
+    if (response.agentState) {
+      setAgentState(response.agentState);
+    }
+    renderConnection();
+    renderMessages();
   });
 
-  // 恢复存储的配置
-  const stored = await chrome.storage.local.get(["wsUrl", "model"]);
+  const stored = await chrome.storage.local.get(["wsUrl", "model", "agentState"]);
   if (stored.wsUrl) {
-    document.querySelector("#ws-url").value = stored.wsUrl;
+    document.getElementById("ws-url").value = stored.wsUrl;
   }
   if (stored.model) {
-    p.model = stored.model;
+    state.model = stored.model;
+    renderHeader();
   }
-  document.querySelector(".title").textContent = "当前AI: " + p.model;
+  if (stored.agentState) {
+    setAgentState(stored.agentState);
+  }
 
-  addMessage("初始化完毕！");
-  updateStatus();
+  addMessage("插件已初始化");
 
-  await ensureContentScriptReady(p.currentTab.id);
+  if (state.currentTab?.id) {
+    await ensureContentScriptReady(state.currentTab.id);
+    if (state.linkStatus === "link") {
+      notifyCurrentTabConnected();
+    }
+  }
 
-  // 连接/断开按钮
-  const connectBtn = document.getElementById("connect-btn");
-  connectBtn.addEventListener("click", () => {
-    if (p.linkStatus === "unlink") {
+  document.getElementById("connect-btn").addEventListener("click", () => {
+    if (state.linkStatus === "unlink") {
       connectWs();
     } else {
       disconnectWs();
     }
   });
 
-  // 监听来自 Background 和 Content Script 的消息
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    // 处理 Background 广播的消息
-    if (request.type) {
-      switch (request.type) {
-        case "connected":
-          p.linkStatus = "link";
-          addMessage(request.message);
-          break;
-        case "disconnected":
-          p.linkStatus = "unlink";
-          addMessage(request.message);
-          break;
-        case "message":
-          addMessage("收到: " + request.data);
-          break;
-        case "error":
-          p.linkStatus = "unlink";
-          addMessage(request.message);
-          break;
-        case "pageRefreshed":
-          addMessage("检测到页面刷新");
-          break;
-        case "detect":
-          if (request.data?.model) {
-            p.model = request.data.model;
-            document.querySelector(".title").textContent = "当前AI: " + p.model;
-            addMessage(request.data.message + " " + request.data.model);
-          }
-          break;
-      }
-    }
-
-    // 处理 Content Script 的直接消息（不处理 Background 转发的）
-    if (request.action && sender.tab) {
-      // sender.tab 存在说明消息来自 Content Script
-      switch (request.action) {
-        case "detect":
-          document.querySelector(".title").textContent =
-            "当前AI: " + request.data.model;
-          p.model = request.data.model;
-          addMessage(request.data.message + " " + request.data.model);
-          break;
-      }
-    }
+    handleBackgroundMessage(request, sender);
+    sendResponse?.({ success: true });
+    return true;
   });
 });

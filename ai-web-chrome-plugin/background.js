@@ -5,6 +5,99 @@ let linkStatus = "unlink";
 let timer = null;
 let messageHistory = [];
 let currentTabId = null;
+let agentState = createEmptyAgentState();
+const STRUCTURED_TAGS = [
+  { kind: "command", start: "<aiws_command>", end: "</aiws_command>" },
+  { kind: "questions", start: "<aiws_questions>", end: "</aiws_questions>" },
+  { kind: "file", start: "<aiws_file>", end: "</aiws_file>" },
+];
+const STRUCTURED_TAIL_KEEP =
+  Math.max(...STRUCTURED_TAGS.map((item) => item.start.length)) - 1;
+
+function createEmptyAgentState() {
+  return {
+    workspace_configured: false,
+    workspace_root: "",
+    file_count: 0,
+    dir_count: 0,
+    language_summary: [],
+    important_files: [],
+    notes: [],
+    tree_preview: [],
+    pending: [],
+    pending_count: 0,
+    awaiting_confirm: false,
+    last_action: "",
+    updated_at: "",
+  };
+}
+
+function tryParseJson(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return null;
+  }
+}
+
+function normalizeAgentState(raw) {
+  const base = createEmptyAgentState();
+  if (!raw || typeof raw !== "object") {
+    return base;
+  }
+
+  const nextState = {
+    ...base,
+    ...raw,
+  };
+  nextState.language_summary = Array.isArray(raw.language_summary)
+    ? raw.language_summary
+    : [];
+  nextState.important_files = Array.isArray(raw.important_files)
+    ? raw.important_files
+    : [];
+  nextState.notes = Array.isArray(raw.notes) ? raw.notes : [];
+  nextState.tree_preview = Array.isArray(raw.tree_preview) ? raw.tree_preview : [];
+  nextState.pending = Array.isArray(raw.pending) ? raw.pending : [];
+  nextState.pending_count = Number.isInteger(raw.pending_count)
+    ? raw.pending_count
+    : nextState.pending.length;
+  nextState.awaiting_confirm = Boolean(raw.awaiting_confirm);
+  nextState.workspace_configured = Boolean(raw.workspace_configured);
+  nextState.workspace_root =
+    typeof raw.workspace_root === "string" ? raw.workspace_root : "";
+  nextState.last_action = typeof raw.last_action === "string" ? raw.last_action : "";
+  nextState.updated_at = typeof raw.updated_at === "string" ? raw.updated_at : "";
+  return nextState;
+}
+
+function setAgentState(nextState, options = {}) {
+  const { persist = true, broadcast = true } = options;
+  agentState = normalizeAgentState(nextState);
+  if (persist) {
+    try {
+      chrome.storage.local.set({ agentState });
+    } catch (error) {}
+  }
+  if (broadcast) {
+    broadcastToAll({ type: "agentStatus", data: agentState });
+    broadcastToContentScripts({ action: "agent_status", data: agentState });
+  }
+}
+
+function hydrateFromStorage() {
+  chrome.storage.local.get(["wsUrl", "agentState"], (result) => {
+    if (result.wsUrl) {
+      wsUrl = result.wsUrl;
+    }
+    if (result.agentState) {
+      setAgentState(result.agentState, { persist: false, broadcast: false });
+    }
+  });
+}
 
 // 初始化 WebSocket 连接
 function connectWebSocket(url) {
@@ -48,6 +141,16 @@ function connectWebSocket(url) {
         return;
       }
     } catch (e) {}
+    if (parsedData?.type === 5001) {
+      const payload =
+        typeof parsedData.message === "string"
+          ? tryParseJson(parsedData.message)
+          : parsedData.message;
+      if (payload) {
+        setAgentState(payload);
+      }
+      return;
+    }
     const historyContent =
       parsedData?.data ?? parsedData?.message ?? parsedData?.content ?? rawData;
     const message = {
@@ -133,6 +236,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         linkStatus,
         wsUrl,
         messageHistory,
+        agentState,
       });
       break;
 
@@ -191,12 +295,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Service Worker 安装时恢复状态
 chrome.runtime.onInstalled.addListener(() => {
   console.log("Background Service Worker 已安装");
-  chrome.storage.local.get(["wsUrl"], (result) => {
-    if (result.wsUrl) {
-      wsUrl = result.wsUrl;
-    }
-  });
+  hydrateFromStorage();
 });
+
+hydrateFromStorage();
 
 // 转发消息
 // 存储未完成的流，按 requestId 拼接
@@ -240,11 +342,138 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       onStreamChunk(payload);
     }
     if (payload.done) {
-      streamParseStates.delete(requestId);
+      finalizeStream(requestId);
       streamBuffers.delete(requestId);
     }
   }
 });
+
+function forwardPlainText(text) {
+  if (typeof text !== "string" || text.length === 0) {
+    return;
+  }
+  sendToWebSocket({
+    type: 1001,
+    message: text,
+  });
+}
+
+function emitStructuredBlock(kind, jsonText) {
+  let parsed = null;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (error) {
+    console.warn("[Structured Output] invalid JSON block", kind, error);
+    return;
+  }
+
+  if (kind === "command") {
+    const command = extractAgentCommand(parsed);
+    if (command) {
+      sendToWebSocket({
+        type: 4001,
+        message: JSON.stringify(command),
+      });
+    }
+    return;
+  }
+
+  if (kind === "questions") {
+    const questions = extractQuestions(parsed);
+    if (questions.length > 0) {
+      sendToWebSocket({
+        type: 2001,
+        message: JSON.stringify({ questions }),
+      });
+    }
+    return;
+  }
+
+  if (kind === "file") {
+    const filePayload = extractFilePayload(parsed);
+    if (filePayload) {
+      sendToWebSocket({
+        type: 3002,
+        message: JSON.stringify(filePayload),
+      });
+    }
+  }
+}
+
+function flushStructuredText(state, isDone = false) {
+  if (!state || typeof state.textBuffer !== "string") {
+    return;
+  }
+
+  while (state.textBuffer.length > 0) {
+    let nextTag = null;
+    let nextIndex = -1;
+
+    STRUCTURED_TAGS.forEach((tag) => {
+      const idx = state.textBuffer.indexOf(tag.start);
+      if (idx !== -1 && (nextIndex === -1 || idx < nextIndex)) {
+        nextTag = tag;
+        nextIndex = idx;
+      }
+    });
+
+    if (!nextTag) {
+      if (isDone) {
+        forwardPlainText(state.textBuffer);
+        state.textBuffer = "";
+        return;
+      }
+      const safeLen = state.textBuffer.length - STRUCTURED_TAIL_KEEP;
+      if (safeLen > 0) {
+        forwardPlainText(state.textBuffer.slice(0, safeLen));
+        state.textBuffer = state.textBuffer.slice(safeLen);
+      }
+      return;
+    }
+
+    if (nextIndex > 0) {
+      forwardPlainText(state.textBuffer.slice(0, nextIndex));
+      state.textBuffer = state.textBuffer.slice(nextIndex);
+      continue;
+    }
+
+    const endIndex = state.textBuffer.indexOf(nextTag.end, nextTag.start.length);
+    if (endIndex === -1) {
+      if (isDone) {
+        forwardPlainText(state.textBuffer);
+        state.textBuffer = "";
+      }
+      return;
+    }
+
+    const jsonText = state.textBuffer
+      .slice(nextTag.start.length, endIndex)
+      .trim();
+    emitStructuredBlock(nextTag.kind, jsonText);
+    state.textBuffer = state.textBuffer.slice(endIndex + nextTag.end.length);
+  }
+}
+
+function finalizeStream(requestId) {
+  const state = streamParseStates.get(requestId);
+  if (!state) {
+    return;
+  }
+
+  if (typeof state.carry === "string" && state.carry.length > 0) {
+    const line = state.carry.trim();
+    if (line.startsWith("event:")) {
+      state.event = line.slice(6).trim() || "message";
+    } else if (line.startsWith("data:")) {
+      state.dataLines.push(line.slice(5).trim());
+    }
+    state.carry = "";
+  }
+
+  flushSseFrame(requestId, state);
+  flushStructuredText(state, true);
+  streamParseStates.delete(requestId);
+}
 
 function flushSseFrame(requestId, state) {
   if (!state || !state.dataLines || state.dataLines.length === 0) {
@@ -276,26 +505,6 @@ function flushSseFrame(requestId, state) {
     const indexKey = String(parsed?.index ?? "");
     const partialJson = parsed?.delta?.partial_json || "";
     state.toolInputs[indexKey] = (state.toolInputs[indexKey] || "") + partialJson;
-    if (!state.fileState) {
-      state.fileState = {};
-    }
-    const fileState = state.fileState[indexKey] || {
-      hasPath: false,
-      inFileText: false,
-    };
-    if (!fileState.hasPath && partialJson.includes("\"path\"")) {
-      fileState.hasPath = true;
-    }
-    if (!fileState.inFileText && partialJson.includes("\"file_text\"")) {
-      fileState.inFileText = true;
-    }
-    if (fileState.inFileText) {
-      sendToWebSocket({
-        type: 1001,
-        message: partialJson,
-      });
-    }
-    state.fileState[indexKey] = fileState;
   }
   if (eventType === "content_block_stop" || parsed?.type === "content_block_stop") {
     const indexKey = String(parsed?.index ?? "");
@@ -305,6 +514,13 @@ function flushSseFrame(requestId, state) {
       try {
         inputJson = JSON.parse(inputText);
       } catch (error) {}
+      const agentCommand = extractAgentCommand(inputJson);
+      if (agentCommand) {
+        sendToWebSocket({
+          type: 4001,
+          message: JSON.stringify(agentCommand),
+        });
+      }
       const questions = extractQuestions(inputJson);
       if (questions.length > 0) {
         sendToWebSocket({
@@ -321,9 +537,6 @@ function flushSseFrame(requestId, state) {
       }
       delete state.toolInputs[indexKey];
     }
-    if (state.fileState && state.fileState[indexKey]) {
-      delete state.fileState[indexKey];
-    }
   }
   const content =
     parsed?.choices?.[0]?.delta?.content ||
@@ -331,10 +544,8 @@ function flushSseFrame(requestId, state) {
     parsed?.content_block?.text ||
     "";
   if (content) {
-    sendToWebSocket({
-      type: 1001,
-      message: content,
-    });
+    state.textBuffer = (state.textBuffer || "") + content;
+    flushStructuredText(state, false);
   }
 }
 
@@ -391,6 +602,44 @@ function extractFilePayload(data) {
   return null;
 }
 
+function extractAgentCommand(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+
+  const command = typeof data.command === "string" ? data.command.trim() : "";
+  if (!command) {
+    return null;
+  }
+
+  const result = { command };
+  if (typeof data.path === "string" && data.path.trim()) {
+    result.path = data.path.trim();
+  }
+  if (Array.isArray(data.paths)) {
+    result.paths = data.paths
+      .filter((item) => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (typeof data.query === "string" && data.query.trim()) {
+    result.query = data.query.trim();
+  }
+  if (typeof data.glob === "string" && data.glob.trim()) {
+    result.glob = data.glob.trim();
+  }
+  if (Number.isInteger(data.depth)) {
+    result.depth = data.depth;
+  }
+  if (Number.isInteger(data.max_results)) {
+    result.max_results = data.max_results;
+  }
+  if (typeof data.note === "string" && data.note.trim()) {
+    result.note = data.note.trim();
+  }
+  return result;
+}
+
 function onStreamChunk(payload) {
   if (!payload?.requestId || typeof payload.chunk !== "string") {
     return;
@@ -401,7 +650,7 @@ function onStreamChunk(payload) {
     event: "message",
     dataLines: [],
     toolInputs: {},
-    fileState: {},
+    textBuffer: "",
   };
 
   state.carry += payload.chunk;
@@ -424,11 +673,6 @@ function onStreamChunk(payload) {
     }
   }
 
-  if (payload.done) {
-    flushSseFrame(requestId, state);
-    streamParseStates.delete(requestId);
-    return;
-  }
   streamParseStates.set(requestId, state);
 }
 

@@ -1,4 +1,4 @@
-const AI_WEB_CONTENT_VERSION = "2026-04-10.3";
+const AI_WEB_CONTENT_VERSION = "2026-04-18.2";
 if (window.__AI_WEB_CONTENT_VERSION !== AI_WEB_CONTENT_VERSION) {
   if (window.__AI_WEB_RELAY_HANDLER) {
     window.removeEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
@@ -11,6 +11,7 @@ if (!window.__AI_WEB_INJECTED) {
   window.__AI_WEB_INJECTED = true;
   window.__AI_WEB_RUNTIME_DEAD = false;
   window.__AI_WEB_RELAY_COUNT = 0;
+  window.__AI_WEB_AGENT_STATUS = null;
 
   let aiUrlMap = new Map();
   let ai = "";
@@ -59,15 +60,48 @@ if (!window.__AI_WEB_INJECTED) {
   }
 
   aiUrlMap.set("Qwen", {
-    input: ".message-input-textarea",
-    button: ".send-button",
+    inputs: [
+      ".message-input-textarea",
+      "textarea",
+      "[contenteditable='true']",
+    ],
+    buttons: [
+      ".send-button",
+      "button[type='submit']",
+      "button[aria-label*='Send']",
+    ],
     isInput: true,
   });
   aiUrlMap.set("Claude", {
-    input: "div[contenteditable='true']",
-    button: "button[aria-label='Send message']",
+    inputs: [
+      "div[contenteditable='true']",
+      "div[contenteditable='plaintext-only']",
+      "textarea",
+    ],
+    buttons: [
+      "button[aria-label='Send message']",
+      "button[aria-label='Send Message']",
+      "button[data-testid='send-button']",
+      "button[type='submit']",
+    ],
     isInput: false,
   });
+
+  function findFirstElement(selectors) {
+    if (!Array.isArray(selectors)) {
+      return null;
+    }
+    for (const selector of selectors) {
+      try {
+        const element = document.querySelector(selector);
+        if (element) {
+          return element;
+        }
+      } catch (error) {}
+    }
+    return null;
+  }
+
   function autoQuerySelectorElement() {
     if (window.location.href.includes("qwen")) {
       ai = "Qwen";
@@ -85,40 +119,71 @@ if (!window.__AI_WEB_INJECTED) {
       return;
     }
   }
-  // content.js
+
   function insertText(element, text) {
     element.focus();
-
-    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    ).set;
-
-    nativeInputValueSetter.call(element, element.value + text);
+    const prototype =
+      element instanceof HTMLTextAreaElement
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+    const nativeSetter = descriptor && descriptor.set;
+    if (nativeSetter) {
+      nativeSetter.call(element, element.value + text);
+    } else {
+      element.value = `${element.value || ""}${text}`;
+    }
 
     element.dispatchEvent(new Event("input", { bubbles: true }));
     element.dispatchEvent(new Event("change", { bubbles: true }));
   }
+
+  function insertContentEditableText(element, text) {
+    element.focus();
+    element.textContent = text;
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function triggerSend(inputElement, buttonElement) {
+    if (buttonElement) {
+      buttonElement.click();
+      return;
+    }
+    inputElement.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        bubbles: true,
+      }),
+    );
+  }
+
   function fillMessage(message) {
+    if (!ai) {
+      autoQuerySelectorElement();
+    }
     let elements = aiUrlMap.get(ai);
     if (elements) {
-      let inputElement = document.querySelector(elements.input);
+      let inputElement = findFirstElement(elements.inputs);
 
       if (inputElement) {
-        if (elements.isInput) {
+        const useNativeInput =
+          elements.isInput &&
+          (inputElement instanceof HTMLTextAreaElement ||
+            inputElement instanceof HTMLInputElement);
+
+        if (useNativeInput) {
           insertText(inputElement, message);
         } else {
-          inputElement.focus();
-          inputElement.textContent = message;
-          inputElement.dispatchEvent(new Event("input", { bubbles: true }));
-          inputElement.dispatchEvent(new Event("change", { bubbles: true }));
+          insertContentEditableText(inputElement, message);
         }
         setTimeout(() => {
-          let buttonElement = document.querySelector(elements.button);
-          if (buttonElement) {
-            buttonElement.click();
-          }
+          let buttonElement = findFirstElement(elements.buttons);
+          triggerSend(inputElement, buttonElement);
         }, 500);
+      } else {
+        console.warn("[Content] input element not found for", ai, elements.inputs);
       }
     }
   }
@@ -137,6 +202,7 @@ if (!window.__AI_WEB_INJECTED) {
 
     switch (request.action) {
       case "loaded":
+        autoQuerySelectorElement();
         sendResponse({
           success: true,
           data: {
@@ -152,6 +218,9 @@ if (!window.__AI_WEB_INJECTED) {
         // fillMessage("链接成功");
         break;
       case "message_receive":
+        if (!ai) {
+          autoQuerySelectorElement();
+        }
         let pMsg = null;
         try {
           pMsg =
@@ -165,6 +234,15 @@ if (!window.__AI_WEB_INJECTED) {
         if (pMsg?.type === 1001 && typeof pMsg.message === "string") {
           fillMessage(pMsg.message);
         }
+        sendResponse({ success: true });
+        break;
+      case "agent_status":
+        window.__AI_WEB_AGENT_STATUS = request.data || null;
+        window.dispatchEvent(
+          new CustomEvent("__aiws_agent_status__", {
+            detail: window.__AI_WEB_AGENT_STATUS,
+          }),
+        );
         sendResponse({ success: true });
         break;
 
