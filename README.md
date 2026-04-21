@@ -1,140 +1,146 @@
 # ai-web-socket
 
-`ai-web-socket` 是一个本地 AIAgent 桥接项目，用来把“浏览器里的网页 AI”与“本地代码目录”连接起来。
+`ai-web-socket` 是一个本地 AI 协作桥接服务。它把浏览器里的 AI 网页聊天界面和本地代码工作区连接起来，让你继续在 Qwen、Claude、ChatGPT 这类网页里对话，同时让 AI 能通过受控方式读取项目、搜索代码、执行短命令，并提交“待确认保存”的文件修改。
 
-它的核心目标不是直接调用模型 API，而是配合仓库内的 Chrome 插件 `ai-web-chrome-plugin`，让你可以在 Qwen / Claude 网页中继续使用熟悉的聊天界面，同时让 AI 具备以下能力：
+它不直接调用模型 API，而是由以下几部分协作完成：
 
-- 记录并分析你指定的本地项目目录
-- 按需读取文件、列目录、搜索文本
-- 生成文件修改草案
-- 先暂存编辑结果，只有在你确认后才真正保存到磁盘
-- 在插件 popup 中实时查看当前工作区、待保存文件和最近一次动作
+- 本地 Go 服务负责维护工作区、执行工具调用、暂存编辑结果、广播状态。
+- Chrome 扩展负责连接本地 WebSocket、向网页聊天框自动发送消息、解析 AI 返回的结构化工具请求。
+- 浏览器 AI 页面继续承担对话和推理本身。
 
 ## 适用场景
 
-- 想继续在网页端使用 Qwen / Claude，而不是单独接模型 API
-- 希望 AI 能基于本地项目目录做分析、问答、改代码
-- 希望改动必须经过人工确认，避免模型直接覆盖本地文件
+- 希望继续使用网页端 AI，而不是改造为直连 API 的工作流。
+- 需要让 AI 基于本地项目目录做代码阅读、排查、重构建议和修改草案。
+- 不希望 AI 直接覆盖磁盘文件，而是先暂存，等你人工确认后再落盘。
 
-## 当前能力
+## 核心能力
 
-### 1. 本地项目上下文注入
+### 1. 工作区摘要自动注入
 
-启动服务后，第一条输入就是项目目录路径。服务会：
+本地服务启动后，第一条终端输入应为工作区目录。服务会扫描该目录并生成摘要，包括：
 
-- 记录该目录为当前工作区
-- 扫描目录结构
-- 统计文件和目录数量
-- 提取重要文件和扩展名分布
-- 生成目录树摘要
-- 自动把这些上下文发送给网页 AI
+- 文件数、目录数
+- 语言分布
+- 重要文件
+- 目录树预览
+- 项目特征备注
 
-这样后续你在网页里问“这个项目是做什么的”“帮我改某个模块”时，AI 才知道你说的是哪个项目。
+扩展连接成功后，这份摘要会自动发送给浏览器 AI，帮助它快速建立上下文。
 
 ### 2. 本地工具调用
 
-网页 AI 不能直接访问你的磁盘，所以它会通过结构化命令向本地服务请求工具能力。
+当前桥接层支持以下 ACP 风格方法：
 
-当前支持：
+- `fs/read_text_file`
+- `fs/write_text_file`
+- `_workspace/workspace_summary`
+- `_workspace/read_text_files`
+- `_workspace/list_dir`
+- `_workspace/search_text`
+- `_workspace/run_command`
+- `terminal/create`
+- `terminal/output`
+- `terminal/wait_for_exit`
+- `terminal/kill`
+- `terminal/release`
 
-- `read_file`：读取单个文件
-- `read_files`：批量读取多个文件
-- `list_dir`：查看目录树
-- `search`：按关键字搜索文本
+其中：
 
-### 3. 暂存编辑而不是直接写盘
+- 读取类工具用于按需补充上下文。
+- `_workspace/run_command` 适合执行短命令，例如 `go test ./...`。
+- `terminal/*` 适合需要持续句柄的命令。
+- `fs/write_text_file` 不会直接写盘，只会进入待确认暂存区。
 
-当网页 AI 生成文件修改结果时：
+### 3. 暂存后确认写盘
 
-- 先进入本地“暂存区”
-- 不会自动写入磁盘
-- 你可以先查看暂存内容
-- 只有输入 `save` 后才真正落盘
-- 如果输入 `discard`，则丢弃这次暂存，保留磁盘上的原始文件
+当 AI 生成文件修改时，本地服务会先把结果放入 pending 区，而不是立即覆盖原文件。你可以先查看、对比，再决定是否保存：
 
-这套机制适合把 AI 当作“代码助理”，而不是“直接改你文件的自动脚本”。
+- `pending` 查看待保存文件列表
+- `show [path]` 查看暂存内容
+- `orig [path]` 查看原始内容
+- `save [path]` 保存全部或单个文件
+- `discard [path]` 丢弃全部或单个文件
 
-### 4. 插件状态看板
+### 4. 插件状态面板
 
-Chrome 插件 popup 会实时显示：
+扩展 `popup` 会显示当前桥接状态，包括：
 
-- WebSocket 连接状态
-- 当前 AI 提供方
-- 当前工作区目录
-- 文件数 / 目录数 / 待保存数量
-- 待确认保存的文件列表
-- 最近一次动作
-- 消息日志
+- WebSocket 是否已连接
+- 当前识别到的 AI 页面
+- 工作区路径
+- 文件数和目录数
+- pending 编辑数量
+- 正在执行的工具调用
+- 最近动作和消息日志
+
+## 支持的网站
+
+当前 `manifest.json` 已配置以下页面：
+
+- `https://chat.qwen.ai/*`
+- `https://claude.ai/*`
+- `https://chatgpt.com/*`
+
+如果要接入更多站点，需要继续扩展扩展权限、页面识别逻辑和 DOM 选择器。
+
+## 工作流程
+
+```text
+Terminal
+  -> ai-web-socket
+  -> Chrome Extension
+  -> Browser AI Page
+  -> Chrome Extension extracts structured blocks
+  -> ai-web-socket executes tools or stages edits
+  -> result goes back to Browser AI Page
+```
+
+更具体一点：
+
+1. 在本地启动 `ai-web-socket`。
+2. 在 Chrome 中加载扩展并连接 `ws://localhost:8899/ws`。
+3. 在终端输入工作区路径。
+4. 本地服务生成工作区摘要，并把 bootstrap prompt 发给浏览器 AI。
+5. 你继续在网页里提问。
+6. AI 若需要更多上下文，会输出结构化工具调用。
+7. 扩展提取这些结构化块并转发给本地服务。
+8. 本地服务返回 `[ACP Tool Result]`，AI 基于结果继续工作。
+9. 若 AI 提交文件改动，本地只暂存，需你在终端执行 `save` 确认。
 
 ## 项目结构
 
 ```text
 .
-├─ main.go
-├─ go.mod
-├─ go.sum
-├─ ai-web-chrome-plugin/
-│  ├─ manifest.json
-│  ├─ background.js
-│  ├─ content.js
-│  ├─ injected.js
-│  ├─ popup.html
-│  └─ popup.js
-└─ ai-web-socket.exe
+|-- main.go
+|-- acp_bridge.go
+|-- go.mod
+|-- go.sum
+|-- README.md
+`-- ai-web-chrome-plugin/
+    |-- manifest.json
+    |-- background.js
+    |-- content.js
+    |-- injected.js
+    |-- popup.html
+    |-- popup.js
+    `-- ai_search.png
 ```
 
-### 关键文件说明
+关键文件说明：
 
-- `main.go`
-  本地 WebSocket 服务，负责工作区分析、工具执行、编辑暂存、确认保存、状态广播。
-
-- `ai-web-chrome-plugin/background.js`
-  扩展后台 Service Worker，负责维护 WebSocket 连接、转发消息、同步 agent 状态。
-
-- `ai-web-chrome-plugin/content.js`
-  注入 Qwen / Claude 页面，负责识别输入框、自动填充消息、点击发送按钮。
-
-- `ai-web-chrome-plugin/injected.js`
-  监听页面内网络请求与流式响应，用于提取网页 AI 输出。
-
-- `ai-web-chrome-plugin/popup.html`
-  插件弹窗界面。
-
-- `ai-web-chrome-plugin/popup.js`
-  插件弹窗逻辑，负责连接服务、展示 agent 状态、显示消息日志。
-
-## 工作流程
-
-```text
-本地终端 -> ai-web-socket 服务 -> Chrome 插件 -> Qwen / Claude 网页
-                                              |
-                                              v
-                                   回传 AI 输出 / 工具请求 / 文件草案
-```
-
-更具体一点：
-
-1. 你在终端启动本地服务
-2. 插件连接本地 WebSocket 服务
-3. 你在终端输入项目目录
-4. 本地服务分析目录并把摘要发给网页 AI
-5. 你在网页中继续提问
-6. 如果 AI 需要更多上下文，会请求本地服务读文件 / 列目录 / 搜索
-7. 如果 AI 生成文件编辑结果，本地服务先暂存
-8. 你在终端用 `save` 或 `discard` 决定是否落盘
+- `main.go`：本地 WebSocket 服务、工作区扫描、pending 编辑管理、CLI 交互。
+- `acp_bridge.go`：ACP 方法桥接、命令执行、终端句柄管理、工具结果格式化。
+- `ai-web-chrome-plugin/background.js`：扩展后台，维护 WebSocket、提取结构化输出、转发消息。
+- `ai-web-chrome-plugin/content.js`：注入 AI 页面，识别输入框并自动填充发送消息。
+- `ai-web-chrome-plugin/injected.js`：监听页面内请求与流式响应，协助提取结构化输出。
+- `ai-web-chrome-plugin/popup.*`：扩展状态面板和交互界面。
 
 ## 环境要求
 
-- Go 1.24.x
-- Chrome / Chromium 内核浏览器
-- 可访问的 Qwen 或 Claude 网页
-
-当前插件 `manifest.json` 中只配置了以下站点：
-
-- `https://chat.qwen.ai/*`
-- `https://claude.ai/*`
-
-如果你想支持其他网页 AI，需要继续扩展插件权限和页面选择器。
+- Go 1.24.3 或兼容版本
+- Chrome / Chromium
+- 可访问的 Qwen、Claude 或 ChatGPT 网页
 
 ## 快速开始
 
@@ -146,244 +152,201 @@ Chrome 插件 popup 会实时显示：
 go run . serve
 ```
 
-或者先构建：
+也可以先构建：
 
 ```bash
 go build -o ai-web-socket.exe
 ./ai-web-socket.exe serve
 ```
 
-默认监听地址：
+默认地址：
 
 ```text
 ws://localhost:8899/ws
 ```
 
-也可以手动指定端口：
+指定端口：
 
 ```bash
 go run . serve -p 8899
 ```
 
-### 2. 加载 Chrome 插件
+### 2. 加载 Chrome 扩展
 
-1. 打开浏览器扩展管理页
-2. 开启“开发者模式”
-3. 选择“加载已解压的扩展程序”
-4. 选择目录 `ai-web-chrome-plugin`
+1. 打开扩展管理页。
+2. 开启开发者模式。
+3. 选择“加载已解压的扩展程序”。
+4. 选择目录 `ai-web-chrome-plugin`。
 
-### 3. 打开支持的网页 AI
+### 3. 打开支持的 AI 页面
 
-任选一个：
+任选其一：
 
 - Qwen
 - Claude
+- ChatGPT
 
-### 4. 在 popup 中连接本地服务
+### 4. 在插件弹窗中连接本地服务
 
-插件默认地址就是：
+默认地址就是：
 
 ```text
 ws://localhost:8899/ws
 ```
 
-连接成功后，popup 会显示当前连接状态。
+连接成功后，弹窗会显示连接状态和当前工作区状态。
 
-### 5. 在终端输入项目目录
+### 5. 在终端输入工作区路径
 
-服务启动后，第一条输入必须是工作目录路径，例如：
+服务启动后，第一条输入应为工作区目录，例如：
 
 ```text
 D:\project\my-app
 ```
 
-此时本地服务会分析目录并自动把上下文发送给网页 AI。
+服务会扫描该目录，并在浏览器端连接存在时自动发送 bootstrap prompt。
 
-如果你怀疑上下文没有发过去，可以手动执行：
+如果需要重新发送上下文，可在终端执行：
 
 ```text
 :context
-```
-
-## 推荐使用流程
-
-### 首次进入项目
-
-```text
-1. 启动服务
-2. 打开网页 AI
-3. popup 连接本地服务
-4. 在终端输入项目目录
-5. 等待上下文注入完成
-6. 开始提问
-```
-
-### 典型对话示例
-
-```text
-告诉我这个项目是做什么的
-```
-
-```text
-先阅读 main.go 和 ai-web-chrome-plugin/background.js，帮我说明整体架构
-```
-
-```text
-帮我在 popup 中增加一个按钮，但修改前先读取 popup.html 和 popup.js
-```
-
-## 编辑确认机制
-
-这是本项目最重要的安全约束之一。
-
-当 AI 提交文件修改后：
-
-- 文件不会立即保存
-- 会先显示为 pending
-- 你可以先查看 staged 内容
-- 再决定是否保存
-
-### 查看暂存编辑
-
-```text
-pending
-show
-show ai-web-chrome-plugin/popup.js
-orig ai-web-chrome-plugin/popup.js
-```
-
-### 确认保存
-
-保存全部暂存文件：
-
-```text
-save
-```
-
-只保存某一个文件：
-
-```text
-save ai-web-chrome-plugin/popup.js
-```
-
-### 放弃编辑
-
-丢弃全部暂存文件：
-
-```text
-discard
-```
-
-只丢弃某一个文件：
-
-```text
-discard ai-web-chrome-plugin/popup.js
 ```
 
 ## 终端命令
 
 本地服务支持以下交互命令：
 
-- `:root <dir>`
-  切换工作区目录
+- `:root <dir>` 切换工作区
+- `:context` 重新发送当前工作区上下文
+- `:summary` 打印当前工作区摘要
+- `pending` 查看待确认保存的编辑
+- `show [path]` 查看暂存内容
+- `orig [path]` 查看原始内容
+- `save [path]` 保存全部或单个暂存文件
+- `discard [path]` 丢弃全部或单个暂存文件
+- `help` 打印帮助
 
-- `:context`
-  重新把当前工作区上下文发给网页 AI
+除以上命令外，其他终端输入会被转发给浏览器 AI。
 
-- `:summary`
-  打印当前工作区摘要
+当存在 pending 编辑时，新的普通指令不会继续发送，直到你执行 `save` 或 `discard`。
 
-- `pending`
-  查看待保存的暂存编辑
+## 浏览器 AI 输出格式
 
-- `show [path]`
-  查看暂存内容
+扩展会从 AI 输出中提取结构化块。推荐使用 ACP 风格调用：
 
-- `orig [path]`
-  查看磁盘上的原始内容
+### ACP 风格
 
-- `save [path]`
-  保存全部或指定暂存文件
+读取单个文件：
 
-- `discard [path]`
-  丢弃全部或指定暂存文件
+```text
+<aiws_call>{"method":"fs/read_text_file","params":{"path":"main.go"}}</aiws_call>
+```
 
-- `help`
-  查看帮助
+批量读取文件：
 
-## 插件说明
+```text
+<aiws_call>{"method":"_workspace/read_text_files","params":{"paths":["main.go","acp_bridge.go"]}}</aiws_call>
+```
 
-### popup 的作用
+列目录：
 
-popup 不是直接操作网页 DOM 的地方，它主要负责：
+```text
+<aiws_call>{"method":"_workspace/list_dir","params":{"path":"ai-web-chrome-plugin","depth":2}}</aiws_call>
+```
 
-- 连接 / 断开 WebSocket
-- 显示当前 agent 状态
-- 显示消息日志
-- 在连接成功后通知当前标签页进入可自动填充状态
+搜索文本：
 
-### content script 的作用
+```text
+<aiws_call>{"method":"_workspace/search_text","params":{"query":"websocket","glob":"*.go","maxResults":20}}</aiws_call>
+```
 
-`content.js` 才是真正负责自动填充网页输入框和点击发送按钮的脚本。
+执行短命令：
 
-它会：
+```text
+<aiws_call>{"method":"_workspace/run_command","params":{"command":"go","args":["test","./..."],"cwd":"."}}</aiws_call>
+```
 
-- 识别当前页面属于 Qwen 还是 Claude
-- 找到输入框和发送按钮
-- 把本地服务转发来的 `1001` 文本消息填入输入区域
-- 自动触发发送
+暂存文件修改：
 
-如果你发现“popup 连上了，但网页没有自动发消息”，优先检查：
+```text
+<aiws_call>{"method":"fs/write_text_file","params":{"path":"README.md","content":"full file contents"}}</aiws_call>
+```
 
-1. 当前页面是否是 Qwen / Claude
-2. 内容脚本是否已经注入
-3. 页面结构是否发生变化，导致选择器失效
+创建终端句柄：
 
-## 与网页 AI 的协作方式
+```text
+<aiws_call>{"method":"terminal/create","params":{"command":"npm","args":["run","dev"],"cwd":"."}}</aiws_call>
+```
 
-本地服务会在上下文注入时告诉网页 AI：
+### 兼容的 legacy 风格
 
-- 不能直接假装读取了本地文件
-- 如果需要上下文，必须显式请求本地工具
-- 如果要改文件，必须输出完整文件草案
-- 不能声称已经保存
+项目仍兼容旧结构：
 
-这让网页 AI 更像一个“通过工具工作的 agent”，而不是只会自由发挥的聊天模型。
+```text
+<aiws_command>{"command":"read_file","path":"main.go"}</aiws_command>
+<aiws_command>{"command":"read_files","paths":["main.go","acp_bridge.go"]}</aiws_command>
+<aiws_command>{"command":"list_dir","path":"ai-web-chrome-plugin","depth":2}</aiws_command>
+<aiws_command>{"command":"search","query":"websocket","glob":"*.go","max_results":20}</aiws_command>
+<aiws_file>{"path":"README.md","file_text":"full file contents"}</aiws_file>
+<aiws_questions>{"questions":[{"question":"继续哪个方案？","options":["方案 A","方案 B"]}]}</aiws_questions>
+```
 
-## 开发说明
+注意：
 
-### 运行测试
+- 结构化块必须是合法 JSON。
+- 结构化块不能包在 Markdown 代码块里。
+- 每次只输出一个结构化块最稳妥。
+- `fs/write_text_file` 只是暂存编辑，不代表已经写盘。
 
-当前仓库没有单元测试文件，但可以做基本编译检查：
+## 典型使用方式
+
+### 让网页 AI 分析当前项目
+
+```text
+先阅读 main.go、acp_bridge.go 和 ai-web-chrome-plugin/background.js，说明这个项目的整体架构。
+```
+
+### 让网页 AI 修改文件，但保留人工确认
+
+```text
+先读取 popup.html 和 popup.js，然后帮我优化插件状态区的展示。
+```
+
+AI 如果需要改文件，会把完整文件内容提交给本地桥接层。你再在终端里执行：
+
+```text
+pending
+show ai-web-chrome-plugin/popup.js
+save ai-web-chrome-plugin/popup.js
+```
+
+## 开发与验证
+
+基础编译检查：
 
 ```bash
 go test ./...
 ```
 
-### 插件脚本语法检查
+检查扩展脚本语法：
 
 ```bash
 node --check ai-web-chrome-plugin/background.js
-node --check ai-web-chrome-plugin/popup.js
 node --check ai-web-chrome-plugin/content.js
+node --check ai-web-chrome-plugin/popup.js
 ```
 
 ## 当前限制
 
-- 当前只支持 Qwen 和 Claude 页面
-- 页面 DOM 结构变化时，`content.js` 的选择器可能需要更新
-- 目前保存确认是在终端完成的，不是在 popup 中完成
-- 当前没有做真正的 diff 视图，只能查看 staged / original 文本
-- 本地工具能力目前聚焦在代码阅读和文件编辑，尚未扩展为更完整的命令执行代理
+- 当前主要依赖网页 DOM 结构和响应拦截逻辑，目标站点改版后可能需要更新选择器或注入逻辑。
+- 扩展目前面向 Chrome Manifest V3。
+- 保存确认发生在本地终端，不在扩展弹窗里完成。
+- pending 预览是文本级查看，不是完整 diff UI。
+- 是否能稳定提取结构化块，也会受到不同 AI 页面输出格式影响。
 
-## 后续可扩展方向
+## 设计原则
 
-- 在 popup 中增加“重新发送上下文”按钮
-- 在 popup 中增加暂存文件 diff 预览
-- 支持更多网页 AI 提供方
-- 增加更细粒度的目录白名单 / 黑名单控制
-- 增加文件级别的变更历史与回滚能力
+- AI 可以读本地上下文，但必须通过显式工具调用完成。
+- AI 可以生成修改结果，但不能未经确认直接写盘。
+- 工作区状态、pending 编辑和工具执行过程都应能在本地被观察到。
 
-## 许可证
-
-当前仓库未声明许可证。如需开源发布，建议补充 `LICENSE` 文件。
