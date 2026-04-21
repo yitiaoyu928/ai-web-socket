@@ -1,4 +1,4 @@
-const AI_WEB_CONTENT_VERSION = "2026-04-18.2";
+const AI_WEB_CONTENT_VERSION = "2026-04-20.1";
 if (window.__AI_WEB_CONTENT_VERSION !== AI_WEB_CONTENT_VERSION) {
   if (window.__AI_WEB_RELAY_HANDLER) {
     window.removeEventListener("__ext_relay__", window.__AI_WEB_RELAY_HANDLER);
@@ -7,7 +7,9 @@ if (window.__AI_WEB_CONTENT_VERSION !== AI_WEB_CONTENT_VERSION) {
 }
 window.__AI_WEB_CONTENT_VERSION = AI_WEB_CONTENT_VERSION;
 
-if (!window.__AI_WEB_INJECTED) {
+if (window.top !== window) {
+  console.log("[Content] skip subframe", window.location.href);
+} else if (!window.__AI_WEB_INJECTED) {
   window.__AI_WEB_INJECTED = true;
   window.__AI_WEB_RUNTIME_DEAD = false;
   window.__AI_WEB_RELAY_COUNT = 0;
@@ -150,9 +152,9 @@ if (!window.__AI_WEB_INJECTED) {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
     const nativeSetter = descriptor && descriptor.set;
     if (nativeSetter) {
-      nativeSetter.call(element, element.value + text);
+      nativeSetter.call(element, text);
     } else {
-      element.value = `${element.value || ""}${text}`;
+      element.value = text;
     }
 
     element.dispatchEvent(new Event("input", { bubbles: true }));

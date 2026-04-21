@@ -1,5 +1,9 @@
 function createEmptyAgentState() {
   return {
+    protocol: "",
+    protocol_version: 0,
+    session_id: "",
+    turn_count: 0,
     workspace_configured: false,
     workspace_root: "",
     file_count: 0,
@@ -11,7 +15,10 @@ function createEmptyAgentState() {
     pending: [],
     pending_count: 0,
     awaiting_confirm: false,
+    active_tool_calls: [],
+    active_tool_count: 0,
     last_action: "",
+    last_stop_reason: "",
     updated_at: "",
   };
 }
@@ -64,6 +71,7 @@ function normalizeAgentState(raw) {
     notes: Array.isArray(raw.notes) ? raw.notes : [],
     tree_preview: Array.isArray(raw.tree_preview) ? raw.tree_preview : [],
     pending: Array.isArray(raw.pending) ? raw.pending : [],
+    active_tool_calls: Array.isArray(raw.active_tool_calls) ? raw.active_tool_calls : [],
   };
 }
 
@@ -88,16 +96,57 @@ function renderConnection() {
   const text = document.getElementById("status-text");
 
   if (state.linkStatus === "link") {
-    button.textContent = "断开连接";
+    button.textContent = "Disconnect";
     button.className = "btn disconnect";
     dot.className = "dot connected";
-    text.textContent = "已连接";
+    text.textContent = "Connected";
   } else {
-    button.textContent = "连接 WebSocket";
+    button.textContent = "Connect WebSocket";
     button.className = "btn";
     dot.className = "dot";
-    text.textContent = "未连接";
+    text.textContent = "Disconnected";
   }
+}
+
+function buildSummaryItems(data) {
+  const items = [];
+
+  if (data.language_summary.length > 0) {
+    items.push(`Languages: ${data.language_summary.join(", ")}`);
+  }
+  if (data.important_files.length > 0) {
+    items.push(`Important files: ${data.important_files.slice(0, 5).join(", ")}`);
+  }
+  if (data.notes.length > 0) {
+    items.push(...data.notes.slice(0, 4));
+  }
+  if (data.protocol) {
+    const protocolLabel = data.protocol_version
+      ? `${data.protocol} v${data.protocol_version}`
+      : data.protocol;
+    items.push(`Protocol: ${protocolLabel}`);
+  }
+  if (data.session_id) {
+    items.push(`Session: ${data.session_id}`);
+  }
+  if (Number.isInteger(data.turn_count) && data.turn_count > 0) {
+    items.push(`Turns: ${data.turn_count}`);
+  }
+  const activeToolCount = data.active_tool_count || data.active_tool_calls.length || 0;
+  if (activeToolCount > 0) {
+    const preview = data.active_tool_calls
+      .slice(0, 3)
+      .map((item) => `${item.title || item.method || "tool"} (${item.status || "running"})`);
+    items.push(`Active tools: ${preview.join(", ")}`);
+  }
+  if (data.last_stop_reason) {
+    items.push(`Stop reason: ${data.last_stop_reason}`);
+  }
+  if (data.updated_at) {
+    items.push(`Updated: ${formatTime(data.updated_at)}`);
+  }
+
+  return items;
 }
 
 function renderAgentStatus() {
@@ -115,33 +164,41 @@ function renderAgentStatus() {
   const summaryList = document.getElementById("summary-list");
   const treePreview = document.getElementById("tree-preview");
   const workspaceDetails = document.getElementById("workspace-details");
+  const activeToolCount = data.active_tool_count || data.active_tool_calls.length || 0;
 
   if (!data.workspace_configured) {
-    mode.textContent = "未初始化";
+    mode.textContent = "Idle";
     mode.className = "mode-pill idle";
-    stateText.textContent = "等待设置工作目录";
-    action.textContent = data.last_action || "尚未建立本地项目上下文";
-    root.textContent = "未设置";
-    hint.textContent = "在本地服务启动后，第一条输入应为工作目录路径。";
-  } else if (data.awaiting_confirm) {
-    mode.textContent = "待保存";
-    mode.className = "mode-pill pending";
-    stateText.textContent = "等待确认保存";
-    action.textContent = data.last_action || "存在待确认保存的编辑";
-    root.textContent = data.workspace_root;
-    hint.textContent = "当前有暂存编辑，需要在本地服务里执行 save 或 discard。";
-  } else {
-    mode.textContent = "已就绪";
+    stateText.textContent = "Waiting for workspace";
+    action.textContent = data.last_action || "No workspace is configured yet.";
+    root.textContent = "Not configured";
+    hint.textContent = "After the local bridge starts, the first terminal input should be the workspace path.";
+  } else if (activeToolCount > 0) {
+    mode.textContent = "Running";
     mode.className = "mode-pill";
-    stateText.textContent = "工作区已就绪";
-    action.textContent = data.last_action || "可继续向网页 AI 发送任务";
+    stateText.textContent = "Agent is using local tools";
+    action.textContent = data.last_action || "ACP-style tool calls are in progress.";
     root.textContent = data.workspace_root;
-    hint.textContent = "工作区已同步到插件，可继续向网页 AI 发送任务。";
+    hint.textContent = "The bridge is executing local tools. Watch the message log for results.";
+  } else if (data.awaiting_confirm) {
+    mode.textContent = "Pending";
+    mode.className = "mode-pill pending";
+    stateText.textContent = "Waiting for save confirmation";
+    action.textContent = data.last_action || "There are staged edits waiting for `save` or `discard`.";
+    root.textContent = data.workspace_root;
+    hint.textContent = "Edits are staged only. Confirm them locally with `save` or `discard`.";
+  } else {
+    mode.textContent = "Ready";
+    mode.className = "mode-pill";
+    stateText.textContent = "Workspace synced";
+    action.textContent = data.last_action || "You can continue sending tasks to the browser AI.";
+    root.textContent = data.workspace_root;
+    hint.textContent = "The workspace context is synced and ready for the next turn.";
   }
 
-  files.textContent = `文件 ${data.file_count || 0}`;
-  dirs.textContent = `目录 ${data.dir_count || 0}`;
-  pending.textContent = `待保存 ${data.pending_count || 0}`;
+  files.textContent = `Files ${data.file_count || 0}`;
+  dirs.textContent = `Dirs ${data.dir_count || 0}`;
+  pending.textContent = `Pending ${data.pending_count || 0} / Tools ${activeToolCount}`;
 
   pendingList.innerHTML = "";
   if (data.pending.length === 0) {
@@ -156,7 +213,7 @@ function renderAgentStatus() {
       title.textContent = item.rel_path || "(unknown)";
       const meta = document.createElement("div");
       meta.className = "subtle";
-      meta.textContent = `${item.existed ? "更新" : "新建"} · staged ${formatBytes(item.bytes)} · original ${formatBytes(item.original_size)}`;
+      meta.textContent = `${item.existed ? "update" : "create"} | staged ${formatBytes(item.bytes)} | original ${formatBytes(item.original_size)}`;
       li.appendChild(title);
       li.appendChild(meta);
       fragment.appendChild(li);
@@ -165,24 +222,11 @@ function renderAgentStatus() {
   }
 
   summaryList.innerHTML = "";
-  const summaryItems = [];
-  if (data.language_summary.length > 0) {
-    summaryItems.push(`语言分布: ${data.language_summary.join(", ")}`);
-  }
-  if (data.important_files.length > 0) {
-    summaryItems.push(`关键文件: ${data.important_files.slice(0, 5).join(", ")}`);
-  }
-  if (data.notes.length > 0) {
-    summaryItems.push(...data.notes.slice(0, 4));
-  }
-  if (data.updated_at) {
-    summaryItems.push(`最近更新: ${formatTime(data.updated_at)}`);
-  }
-
+  const summaryItems = buildSummaryItems(data);
   if (summaryItems.length === 0) {
     const li = document.createElement("li");
     li.className = "empty";
-    li.textContent = "工作区摘要尚未生成。";
+    li.textContent = "Workspace summary has not been generated yet.";
     summaryList.appendChild(li);
   } else {
     const fragment = document.createDocumentFragment();
@@ -200,7 +244,7 @@ function renderAgentStatus() {
     treePreview.textContent =
       data.tree_preview && data.tree_preview.length > 0
         ? data.tree_preview.join("\n")
-        : "暂无目录树预览";
+        : "No tree preview yet.";
   } else {
     workspaceDetails.style.display = "none";
     treePreview.textContent = "";
@@ -212,7 +256,7 @@ function renderMessages() {
   messageLog.innerHTML = "";
 
   if (messages.length === 0) {
-    messageLog.innerHTML = '<div class="empty">暂无消息。</div>';
+    messageLog.innerHTML = '<div class="empty">No messages yet.</div>';
     return;
   }
 
@@ -258,17 +302,17 @@ function connectWs() {
     },
     () => {
       if (chrome.runtime.lastError) {
-        addMessage(`连接失败: ${chrome.runtime.lastError.message}`);
+        addMessage(`Connect failed: ${chrome.runtime.lastError.message}`);
         return;
       }
-      addMessage("正在连接 WebSocket...");
+      addMessage("Connecting WebSocket...");
     },
   );
 }
 
 function disconnectWs() {
   chrome.runtime.sendMessage({ action: "disconnect" });
-  addMessage("正在断开 WebSocket...");
+  addMessage("Disconnecting WebSocket...");
 }
 
 async function notifyCurrentTabConnected() {
@@ -279,7 +323,7 @@ async function notifyCurrentTabConnected() {
   try {
     await chrome.tabs.sendMessage(state.currentTab.id, { action: "connected" });
   } catch (error) {
-    addMessage("当前标签页无法接收连接通知");
+    addMessage("The current tab could not receive the connection notice.");
   }
 }
 
@@ -305,7 +349,7 @@ async function ensureContentScriptReady(tabId) {
     });
     chrome.tabs.sendMessage(tabId, { action: "loaded" }, () => {});
   } catch (error) {
-    addMessage("当前标签页未注入内容脚本");
+    addMessage("The content script could not be injected into the current tab.");
   }
 }
 
@@ -329,7 +373,7 @@ function handleBackgroundMessage(request, sender) {
         addMessage(request.message);
         return;
       case "pageRefreshed":
-        addMessage("检测到页面刷新");
+        addMessage("Detected page refresh.");
         return;
       case "detect":
         if (request.data?.model) {
@@ -346,7 +390,7 @@ function handleBackgroundMessage(request, sender) {
         if (envelope?.type === 1001 && typeof envelope.message === "string") {
           addMessage(envelope.message);
         } else if (typeof request.data === "string") {
-          addMessage(`收到: ${request.data}`);
+          addMessage(`Received: ${request.data}`);
         }
         return;
       }
@@ -404,7 +448,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     setAgentState(stored.agentState);
   }
 
-  addMessage("插件已初始化");
+  addMessage("Popup initialized.");
 
   if (state.currentTab?.id) {
     await ensureContentScriptReady(state.currentTab.id);

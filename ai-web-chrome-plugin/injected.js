@@ -6,9 +6,10 @@
   const HOOK_URL_PATTERNS = [
     "/chat/completions",
     "/completions",
-    "/api/organizations/",
     "/api/chat_conversations",
     "/api/retry_message",
+    "/completion",
+    "/messages",
     "/f/conversation"
   ];
   function shouldHookUrl(url) {

@@ -121,6 +121,10 @@ type PendingEditInfo struct {
 }
 
 type AgentStatusPayload struct {
+	Protocol            string            `json:"protocol,omitempty"`
+	ProtocolVersion     int               `json:"protocol_version,omitempty"`
+	SessionID           string            `json:"session_id,omitempty"`
+	TurnCount           int               `json:"turn_count,omitempty"`
 	WorkspaceConfigured bool              `json:"workspace_configured"`
 	WorkspaceRoot       string            `json:"workspace_root,omitempty"`
 	FileCount           int               `json:"file_count,omitempty"`
@@ -132,7 +136,10 @@ type AgentStatusPayload struct {
 	Pending             []PendingEditInfo `json:"pending,omitempty"`
 	PendingCount        int               `json:"pending_count"`
 	AwaitingConfirm     bool              `json:"awaiting_confirm"`
+	ActiveToolCalls     []ToolCallInfo    `json:"active_tool_calls,omitempty"`
+	ActiveToolCount     int               `json:"active_tool_count,omitempty"`
 	LastAction          string            `json:"last_action,omitempty"`
+	LastStopReason      string            `json:"last_stop_reason,omitempty"`
 	UpdatedAt           time.Time         `json:"updated_at,omitempty"`
 }
 
@@ -141,10 +148,16 @@ type AgentState struct {
 	rootDir         string
 	summary         WorkspaceSummary
 	pending         map[string]*PendingEdit
+	activeTools     map[string]*ToolCallInfo
 	bootstrapPrompt string
 	bootstrapDirty  bool
 	lastAction      string
+	lastStopReason  string
 	lastUpdatedAt   time.Time
+	sessionID       string
+	turnCount       int
+	toolSeq         int
+	terminals       *TerminalManager
 }
 
 func newHub() *Hub {
@@ -230,7 +243,9 @@ func (h *Hub) sendAgentStatus(status AgentStatusPayload) bool {
 
 func newAgentState() *AgentState {
 	return &AgentState{
-		pending: make(map[string]*PendingEdit),
+		pending:     make(map[string]*PendingEdit),
+		activeTools: make(map[string]*ToolCallInfo),
+		terminals:   newTerminalManager(),
 	}
 }
 
@@ -262,12 +277,17 @@ func (s *AgentState) configureRoot(input string) (WorkspaceSummary, string, erro
 	if err != nil {
 		return WorkspaceSummary{}, "", err
 	}
-	bootstrap := buildBootstrapPrompt(summary)
+	bootstrap := buildACPBootstrapPrompt(summary)
+
+	if s.terminals != nil {
+		s.terminals.ReleaseAll()
+	}
 
 	s.mu.Lock()
 	s.rootDir = root
 	s.summary = summary
 	s.pending = make(map[string]*PendingEdit)
+	s.resetSessionLocked()
 	s.bootstrapPrompt = bootstrap
 	s.bootstrapDirty = true
 	s.setLastActionLocked("workspace configured: " + root)
@@ -301,7 +321,7 @@ func (s *AgentState) currentBootstrapPrompt() string {
 	if s.rootDir == "" {
 		return ""
 	}
-	return buildBootstrapPrompt(s.summary)
+	return buildACPBootstrapPrompt(s.summary)
 }
 
 func (s *AgentState) snapshotStatus() AgentStatusPayload {
@@ -309,10 +329,16 @@ func (s *AgentState) snapshotStatus() AgentStatusPayload {
 	defer s.mu.Unlock()
 
 	status := AgentStatusPayload{
+		Protocol:            acpProtocolName,
+		ProtocolVersion:     acpProtocolVersion,
+		SessionID:           s.sessionID,
+		TurnCount:           s.turnCount,
 		WorkspaceConfigured: s.rootDir != "",
 		PendingCount:        len(s.pending),
 		AwaitingConfirm:     len(s.pending) > 0,
+		ActiveToolCount:     len(s.activeTools),
 		LastAction:          s.lastAction,
+		LastStopReason:      s.lastStopReason,
 		UpdatedAt:           s.lastUpdatedAt,
 	}
 	if s.rootDir == "" {
@@ -344,6 +370,13 @@ func (s *AgentState) snapshotStatus() AgentStatusPayload {
 	}
 	sort.Slice(status.Pending, func(i, j int) bool {
 		return status.Pending[i].RelPath < status.Pending[j].RelPath
+	})
+	status.ActiveToolCalls = make([]ToolCallInfo, 0, len(s.activeTools))
+	for _, info := range s.activeTools {
+		status.ActiveToolCalls = append(status.ActiveToolCalls, *info)
+	}
+	sort.Slice(status.ActiveToolCalls, func(i, j int) bool {
+		return status.ActiveToolCalls[i].ToolCallID < status.ActiveToolCalls[j].ToolCallID
 	})
 	return status
 }
@@ -1227,26 +1260,38 @@ var serveCmd = &cobra.Command{
 							log.Println("file payload unmarshal error:", err)
 							continue
 						}
+						tool := state.startToolCall(methodWriteTextFile)
+						pushAgentStatus(hub, state)
 						info, err := state.stageEdit(payload)
 						if err != nil {
+							state.finishToolCall(tool.ToolCallID, "failed", "stage edit failed")
+							pushAgentStatus(hub, state)
 							log.Println("stage edit error:", err)
 							fmt.Printf("\nstage edit failed: %v\n", err)
 							continue
 						}
+						state.finishToolCall(tool.ToolCallID, "completed", "staged edit: "+info.RelPath)
 						fmt.Printf("\nstaged edit: %s (%d bytes)\n", info.RelPath, info.Bytes)
 						fmt.Println("use `show`, `save`, `discard`, or `pending` before sending more instructions")
 						pushAgentStatus(hub, state)
 					case wsTypeCommand:
-						var agentCmd AgentCommand
-						if err := json.Unmarshal([]byte(incoming.Msg), &agentCmd); err != nil {
+						call, err := normalizeIncomingToolCall(incoming.Msg)
+						if err != nil {
 							log.Println("agent command unmarshal error:", err)
 							continue
 						}
-						result, err := state.executeCommand(agentCmd)
+						tool := state.startToolCall(call.Method)
+						pushAgentStatus(hub, state)
+						result, err := state.executeMethodCall(call, tool)
 						if err != nil {
-							result = fmt.Sprintf("[Local Agent Tool Result]\ncommand: %s\nerror: %v", agentCmd.Command, err)
+							state.finishToolCall(tool.ToolCallID, "failed", "tool failed: "+call.Method)
+							pushAgentStatus(hub, state)
+							result = fmt.Sprintf("[ACP Tool Result]\nsession_id: %s\ntool_call_id: %s\nmethod: %s\nerror: %v", state.snapshotStatus().SessionID, tool.ToolCallID, call.Method, err)
+						} else {
+							state.finishToolCall(tool.ToolCallID, "completed", "tool completed: "+call.Method)
+							pushAgentStatus(hub, state)
 						}
-						fmt.Printf("\nlocal tool request: %s\n", agentCmd.Command)
+						fmt.Printf("\nlocal tool request: %s\n", call.Method)
 						if !hub.sendAgentText(result) {
 							fmt.Println("tool result was not sent because no browser client is connected")
 						}
@@ -1297,6 +1342,8 @@ var serveCmd = &cobra.Command{
 				promptSession = nil
 				promptMu.Unlock()
 				inputMu.Unlock()
+				state.recordPromptSent(formatted)
+				pushAgentStatus(hub, state)
 				if !hub.sendAgentText(formatted) {
 					fmt.Println("answers were not sent because no browser client is connected")
 				}
@@ -1412,6 +1459,8 @@ var serveCmd = &cobra.Command{
 				fmt.Println("message was not sent because no browser client is connected")
 				continue
 			}
+			state.recordPromptSent(text)
+			pushAgentStatus(hub, state)
 			fmt.Printf("[sent to %d client(s)] %s\n", hub.clientCount(), text)
 		}
 	},

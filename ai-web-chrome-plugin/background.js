@@ -7,6 +7,7 @@ let messageHistory = [];
 let currentTabId = null;
 let agentState = createEmptyAgentState();
 const STRUCTURED_TAGS = [
+  { kind: "call", start: "<aiws_call>", end: "</aiws_call>" },
   { kind: "command", start: "<aiws_command>", end: "</aiws_command>" },
   { kind: "questions", start: "<aiws_questions>", end: "</aiws_questions>" },
   { kind: "file", start: "<aiws_file>", end: "</aiws_file>" },
@@ -16,6 +17,10 @@ const STRUCTURED_TAIL_KEEP =
 
 function createEmptyAgentState() {
   return {
+    protocol: "",
+    protocol_version: 0,
+    session_id: "",
+    turn_count: 0,
     workspace_configured: false,
     workspace_root: "",
     file_count: 0,
@@ -27,7 +32,10 @@ function createEmptyAgentState() {
     pending: [],
     pending_count: 0,
     awaiting_confirm: false,
+    active_tool_calls: [],
+    active_tool_count: 0,
     last_action: "",
+    last_stop_reason: "",
     updated_at: "",
   };
 }
@@ -62,14 +70,28 @@ function normalizeAgentState(raw) {
   nextState.notes = Array.isArray(raw.notes) ? raw.notes : [];
   nextState.tree_preview = Array.isArray(raw.tree_preview) ? raw.tree_preview : [];
   nextState.pending = Array.isArray(raw.pending) ? raw.pending : [];
+  nextState.active_tool_calls = Array.isArray(raw.active_tool_calls)
+    ? raw.active_tool_calls
+    : [];
   nextState.pending_count = Number.isInteger(raw.pending_count)
     ? raw.pending_count
     : nextState.pending.length;
+  nextState.active_tool_count = Number.isInteger(raw.active_tool_count)
+    ? raw.active_tool_count
+    : nextState.active_tool_calls.length;
   nextState.awaiting_confirm = Boolean(raw.awaiting_confirm);
   nextState.workspace_configured = Boolean(raw.workspace_configured);
   nextState.workspace_root =
     typeof raw.workspace_root === "string" ? raw.workspace_root : "";
+  nextState.protocol = typeof raw.protocol === "string" ? raw.protocol : "";
+  nextState.protocol_version = Number.isInteger(raw.protocol_version)
+    ? raw.protocol_version
+    : 0;
+  nextState.session_id = typeof raw.session_id === "string" ? raw.session_id : "";
+  nextState.turn_count = Number.isInteger(raw.turn_count) ? raw.turn_count : 0;
   nextState.last_action = typeof raw.last_action === "string" ? raw.last_action : "";
+  nextState.last_stop_reason =
+    typeof raw.last_stop_reason === "string" ? raw.last_stop_reason : "";
   nextState.updated_at = typeof raw.updated_at === "string" ? raw.updated_at : "";
   return nextState;
 }
@@ -162,7 +184,7 @@ function connectWebSocket(url) {
     };
     messageHistory.push(message);
     if (messageHistory.length > 100) messageHistory.shift();
-    broadcastToContentScripts({ action: "message_receive", data: rawData });
+    sendToCurrentContentScript({ action: "message_receive", data: rawData });
     broadcastToAll({ type: "message", data: rawData });
   };
 
@@ -270,7 +292,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       chrome.scripting
         .executeScript({
-          target: { tabId: sender.tab.id, allFrames: true },
+          target: { tabId: sender.tab.id },
           files: ["injected.js"],
           world: "MAIN",
         })
@@ -308,6 +330,7 @@ let hookMessageCount = 0;
 
 chrome.runtime.onMessage.addListener((msg, sender) => {
   if (msg.source !== "ext_hook") return;
+  if (typeof sender?.frameId === "number" && sender.frameId !== 0) return;
   console.log(msg);
   const { payload } = msg;
   if (!payload || !payload.type) return;
@@ -358,6 +381,13 @@ function forwardPlainText(text) {
   });
 }
 
+function sendToCurrentContentScript(message) {
+  if (!currentTabId) {
+    return;
+  }
+  chrome.tabs.sendMessage(currentTabId, message).catch(() => {});
+}
+
 function emitStructuredBlock(kind, jsonText) {
   let parsed = null;
   try {
@@ -367,8 +397,8 @@ function emitStructuredBlock(kind, jsonText) {
     return;
   }
 
-  if (kind === "command") {
-    const command = extractAgentCommand(parsed);
+  if (kind === "call" || kind === "command") {
+    const command = extractBridgeMethodCall(parsed);
     if (command) {
       sendToWebSocket({
         type: 4001,
@@ -397,6 +427,72 @@ function emitStructuredBlock(kind, jsonText) {
         message: JSON.stringify(filePayload),
       });
     }
+  }
+}
+
+function extractBridgeMethodCall(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return null;
+  }
+
+  if (typeof data.method === "string" && data.method.trim()) {
+    const params =
+      data.params && typeof data.params === "object" && !Array.isArray(data.params)
+        ? data.params
+        : {};
+    return {
+      method: data.method.trim(),
+      params,
+    };
+  }
+
+  const legacy = extractAgentCommand(data);
+  if (!legacy) {
+    return null;
+  }
+
+  switch (legacy.command) {
+    case "workspace_summary":
+    case "scan_workspace":
+      return {
+        method: "_workspace/workspace_summary",
+        params: {},
+      };
+    case "read_file":
+      return {
+        method: "fs/read_text_file",
+        params: {
+          path: legacy.path || legacy.paths?.[0] || "",
+        },
+      };
+    case "read_files":
+      return {
+        method: "_workspace/read_text_files",
+        params: {
+          paths: Array.isArray(legacy.paths) ? legacy.paths : [],
+        },
+      };
+    case "list_dir":
+      return {
+        method: "_workspace/list_dir",
+        params: {
+          path: legacy.path || "",
+          depth: Number.isInteger(legacy.depth) ? legacy.depth : undefined,
+        },
+      };
+    case "search":
+      return {
+        method: "_workspace/search_text",
+        params: {
+          query: legacy.query || "",
+          glob: legacy.glob || "",
+          maxResults: Number.isInteger(legacy.max_results)
+            ? legacy.max_results
+            : undefined,
+        },
+      };
+    default:
+      return null;
   }
 }
 
@@ -514,7 +610,7 @@ function flushSseFrame(requestId, state) {
       try {
         inputJson = JSON.parse(inputText);
       } catch (error) {}
-      const agentCommand = extractAgentCommand(inputJson);
+      const agentCommand = extractBridgeMethodCall(inputJson);
       if (agentCommand) {
         sendToWebSocket({
           type: 4001,
